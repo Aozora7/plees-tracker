@@ -104,21 +104,27 @@ class Preferences : PreferenceFragmentCompat() {
                         HealthConnectBackend.ENABLED_KEY,
                         false
                     )
-                    val granted = try {
-                        HealthConnectBackend.hasWritePermission(requireContext())
-                    } catch (e: Exception) {
-                        Log.e(TAG, "refreshHealthConnectState: $e")
-                        // A transient provider error is not a revocation. Preserve the user's
-                        // opt-in and let the worker retry synchronization later.
-                        preference.isChecked = stored
-                        preference.setSummary(
-                            if (stored) {
-                                R.string.settings_health_connect_on
-                            } else {
-                                R.string.settings_health_connect_off
-                            }
-                        )
-                        return@launch
+                    val knownGranted = (activity as? PreferencesActivity)
+                        ?.healthConnectPermissionKnownGranted == true
+                    val granted = if (knownGranted) {
+                        true
+                    } else {
+                        try {
+                            HealthConnectBackend.hasWritePermission(requireContext())
+                        } catch (e: Exception) {
+                            Log.e(TAG, "refreshHealthConnectState: $e")
+                            // A transient provider error is not a revocation. Preserve the user's
+                            // opt-in and let the worker retry synchronization later.
+                            preference.isChecked = stored
+                            preference.setSummary(
+                                if (stored) {
+                                    R.string.settings_health_connect_on
+                                } else {
+                                    R.string.settings_health_connect_off
+                                }
+                            )
+                            return@launch
+                        }
                     }
                     if (stored && !granted) {
                         DataModel.preferences.edit {

@@ -65,6 +65,11 @@ class PreferencesActivity : AppCompatActivity() {
     // Prevent duplicate history checks when activity resume and the permission callback race.
     private var healthEnableInProgress = false
 
+    // The permission result is authoritative for this activity lifetime. Re-querying the
+    // provider immediately after it returns needlessly consumes the APK provider's quota.
+    internal var healthConnectPermissionKnownGranted = false
+        private set
+
     private var healthPermissionLauncher: ActivityResultLauncher<Set<String>>? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -77,6 +82,7 @@ class PreferencesActivity : AppCompatActivity() {
                     putBoolean(HealthConnectBackend.PERMISSION_REQUESTED_KEY, true)
                 }
                 if (granted.containsAll(HealthConnectBackend.requestedPermissions())) {
+                    healthConnectPermissionKnownGranted = true
                     completeHealthConnectEnable()
                 } else {
                     refreshFragment()
@@ -136,7 +142,9 @@ class PreferencesActivity : AppCompatActivity() {
     @RequiresApi(Build.VERSION_CODES.P)
     private suspend fun hasHealthConnectWritePermission(): Boolean? =
         try {
-            HealthConnectBackend.hasWritePermission(applicationContext)
+            HealthConnectBackend.hasWritePermission(applicationContext).also { granted ->
+                healthConnectPermissionKnownGranted = granted
+            }
         } catch (e: Exception) {
             Log.e(TAG, "hasHealthConnectWritePermission: $e")
             null
@@ -257,7 +265,13 @@ class PreferencesActivity : AppCompatActivity() {
             putBoolean(HealthConnectBackend.ENABLED_KEY, true)
             putBoolean(HealthConnectBackend.INITIALIZED_KEY, true)
         }
-        HealthConnectBackend.scheduleSync(applicationContext)
+        lifecycleScope.launch {
+            if (DataModel.hasSleeps() ||
+                DataModel.database.healthConnectDao().getDeletions().isNotEmpty()
+            ) {
+                HealthConnectBackend.scheduleSync(applicationContext)
+            }
+        }
         refreshFragment()
     }
 
@@ -281,7 +295,10 @@ class PreferencesActivity : AppCompatActivity() {
             if (healthSettingsPending) {
                 when (hasHealthConnectWritePermission()) {
                     true -> completeHealthConnectEnable()
-                    false -> healthSettingsPending = false
+                    false -> {
+                        healthConnectPermissionKnownGranted = false
+                        healthSettingsPending = false
+                    }
                     null -> return@launch
                 }
             } else {
