@@ -142,7 +142,7 @@ object HealthConnectBackend {
 
     @RequiresApi(Build.VERSION_CODES.P)
     suspend fun sync(context: Context) {
-        if (!isEnabled(context) || !hasWritePermission(context)) {
+        if (!isEnabled(context)) {
             return
         }
         val client = HealthConnectClient.getOrCreate(context)
@@ -151,11 +151,26 @@ object HealthConnectBackend {
 
     @RequiresApi(Build.VERSION_CODES.P)
     internal suspend fun sync(client: HealthConnectClient, packageName: String) {
+        val healthDao = DataModel.database.healthConnectDao()
+        val sleeps = DataModel.database.sleepDao().getAll().filter { sleep ->
+            if (sleep.stop <= sleep.start) {
+                Log.w(TAG, "Skipping non-positive sleep ${sleep.healthConnectId}")
+                false
+            } else {
+                true
+            }
+        }
+        // Persist current local state before reconciliation. The APK provider has a much tighter
+        // read quota than its write quota; if the following read is temporarily rejected, stable
+        // client IDs and versions still make these upserts safe and the worker retries cleanup.
+        for (chunk in sleeps.map(::toRecord).chunked(PAGE_SIZE)) {
+            client.insertRecords(chunk)
+        }
+
         val ownRecords = readOwnRecords(client, packageName)
             .filter { it.metadata.clientRecordId?.startsWith(CLIENT_ID_PREFIX) == true }
         val remoteByClientId = ownRecords.associateBy { it.metadata.clientRecordId }
 
-        val healthDao = DataModel.database.healthConnectDao()
         val tombstoneIds = healthDao.getDeletions().map { it.healthConnectId }
         for (chunk in tombstoneIds.chunked(PAGE_SIZE)) {
             val clientIds = chunk.map { CLIENT_ID_PREFIX + it }
@@ -170,12 +185,8 @@ object HealthConnectBackend {
             healthDao.deleteDeletionsBatched(chunk)
         }
 
-        val recordsToWrite = mutableListOf<SleepSessionRecord>()
-        for (sleep in DataModel.database.sleepDao().getAll()) {
-            if (sleep.stop <= sleep.start) {
-                Log.w(TAG, "Skipping non-positive sleep ${sleep.healthConnectId}")
-                continue
-            }
+        val recordsToRewrite = mutableListOf<SleepSessionRecord>()
+        for (sleep in sleeps) {
             val clientId = CLIENT_ID_PREFIX + sleep.healthConnectId
             val remote = remoteByClientId[clientId]
             if (remote != null && recordMatches(sleep, remote)) {
@@ -187,10 +198,10 @@ object HealthConnectBackend {
             ) {
                 sleep.healthConnectVersion = remote.metadata.clientRecordVersion + 1
                 healthDao.updateVersion(sleep.healthConnectId, sleep.healthConnectVersion)
+                recordsToRewrite.add(toRecord(sleep))
             }
-            recordsToWrite.add(toRecord(sleep))
         }
-        for (chunk in recordsToWrite.chunked(PAGE_SIZE)) {
+        for (chunk in recordsToRewrite.chunked(PAGE_SIZE)) {
             client.insertRecords(chunk)
         }
     }

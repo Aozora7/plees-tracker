@@ -7,6 +7,11 @@
 package hu.vmiklos.plees_tracker
 
 import android.content.Context
+import android.os.RemoteException
+import androidx.health.connect.client.HealthConnectClient
+import androidx.health.connect.client.records.Record
+import androidx.health.connect.client.request.ReadRecordsRequest
+import androidx.health.connect.client.response.ReadRecordsResponse
 import androidx.health.connect.client.testing.FakeHealthConnectClient
 import androidx.health.connect.client.testing.FakePermissionController
 import androidx.room.Room
@@ -66,6 +71,27 @@ class HealthConnectSyncTest {
         HealthConnectBackend.sync(client, packageName)
         assertEquals(0, HealthConnectBackend.readOwnRecords(client, packageName).size)
         assertEquals(0, database.healthConnectDao().getDeletions().size)
+    }
+
+    @Test
+    fun testWriteCompletesBeforeReadFailure() = runBlocking {
+        val sleep = sleep(1)
+        database.sleepDao().insert(sleep)
+        val readFailureClient = object : HealthConnectClient by client {
+            override suspend fun <T : Record> readRecords(
+                request: ReadRecordsRequest<T>
+            ): ReadRecordsResponse<T> {
+                throw RemoteException("rate limited")
+            }
+        }
+
+        try {
+            HealthConnectBackend.sync(readFailureClient, packageName)
+        } catch (_: RemoteException) {
+            // The worker retries reconciliation, but the local record must already be exported.
+        }
+
+        assertEquals(1, HealthConnectBackend.readOwnRecords(client, packageName).size)
     }
 
     @Test
