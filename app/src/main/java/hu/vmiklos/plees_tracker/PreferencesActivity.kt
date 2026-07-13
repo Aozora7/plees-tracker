@@ -19,6 +19,7 @@ import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.edit
+import androidx.health.connect.client.HealthConnectClient
 import androidx.lifecycle.lifecycleScope
 import androidx.preference.PreferenceManager
 import kotlinx.coroutines.launch
@@ -32,6 +33,7 @@ class PreferencesActivity : AppCompatActivity() {
         private const val STATE_CHANGE_PATH_FROM = "changePathFrom"
         private const val STATE_CHANGE_ACCOUNT_EMAIL = "changeAccountEmail"
         private const val STATE_CHANGE_ACCOUNT_FREQUENCY = "changeAccountFrequency"
+        private const val STATE_HEALTH_SETTINGS_PENDING = "healthSettingsPending"
     }
 
     // Pending state of an in-flight folder-picker or Drive sign-in flow. The system activities
@@ -56,6 +58,10 @@ class PreferencesActivity : AppCompatActivity() {
     // sign-in result adds a new destination instead.
     private var changeAccountFrom: BackupDestination.DriveAccount? = null
 
+    // True while Health Connect's app-specific settings were opened from the enable flow. This
+    // lets a permission granted there complete the opt-in when the user returns to Plees.
+    private var healthSettingsPending = false
+
     private var healthPermissionLauncher: ActivityResultLauncher<Set<String>>? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -64,10 +70,14 @@ class PreferencesActivity : AppCompatActivity() {
             healthPermissionLauncher = registerForActivityResult(
                 HealthConnectBackend.permissionContract()
             ) { granted ->
+                DataModel.preferences.edit {
+                    putBoolean(HealthConnectBackend.PERMISSION_REQUESTED_KEY, true)
+                }
                 if (granted.containsAll(HealthConnectBackend.requestedPermissions())) {
                     completeHealthConnectEnable()
                 } else {
                     refreshFragment()
+                    showHealthConnectPermissionDeniedDialog()
                 }
             }
         }
@@ -83,6 +93,7 @@ class PreferencesActivity : AppCompatActivity() {
             if (email != null && frequency != null) {
                 changeAccountFrom = BackupDestination.DriveAccount(email, frequency)
             }
+            healthSettingsPending = state.getBoolean(STATE_HEALTH_SETTINGS_PENDING)
         }
         supportFragmentManager
             .beginTransaction()
@@ -99,8 +110,50 @@ class PreferencesActivity : AppCompatActivity() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
             return
         }
-        healthPermissionLauncher?.launch(HealthConnectBackend.requestedPermissions())
+        lifecycleScope.launch {
+            if (HealthConnectBackend.hasWritePermission(applicationContext)) {
+                completeHealthConnectEnable()
+                return@launch
+            }
+            val requested = DataModel.preferences.getBoolean(
+                HealthConnectBackend.PERMISSION_REQUESTED_KEY,
+                false
+            )
+            if (requested) {
+                showHealthConnectPermissionDeniedDialog()
+            } else {
+                healthPermissionLauncher?.launch(HealthConnectBackend.requestedPermissions())
+            }
+        }
     }
+
+    private fun showHealthConnectPermissionDeniedDialog() {
+        AlertDialog.Builder(this)
+            .setTitle(R.string.health_connect_permission_denied_title)
+            .setMessage(R.string.health_connect_permission_denied_message)
+            .setPositiveButton(R.string.health_connect_open_settings) { _, _ ->
+                healthSettingsPending = true
+                try {
+                    startActivity(HealthConnectBackend.permissionSettingsIntent(this))
+                } catch (e: Exception) {
+                    Log.e(TAG, "openHealthConnectPermissions: $e")
+                    if (!openHealthConnectSettings()) {
+                        healthSettingsPending = false
+                    }
+                }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun openHealthConnectSettings(): Boolean =
+        try {
+            startActivity(Intent(HealthConnectClient.ACTION_HEALTH_CONNECT_SETTINGS))
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "openHealthConnectSettings: $e")
+            false
+        }
 
     fun openHealthConnectProvider() {
         try {
@@ -166,6 +219,7 @@ class PreferencesActivity : AppCompatActivity() {
     }
 
     private fun finishHealthConnectEnable() {
+        healthSettingsPending = false
         val preferences = PreferenceManager.getDefaultSharedPreferences(applicationContext)
         preferences.edit {
             putBoolean(HealthConnectBackend.ENABLED_KEY, true)
@@ -183,6 +237,19 @@ class PreferencesActivity : AppCompatActivity() {
         outState.putString(STATE_CHANGE_PATH_FROM, changePathFrom?.path)
         outState.putString(STATE_CHANGE_ACCOUNT_EMAIL, changeAccountFrom?.email)
         outState.putString(STATE_CHANGE_ACCOUNT_FREQUENCY, changeAccountFrom?.frequency)
+        outState.putBoolean(STATE_HEALTH_SETTINGS_PENDING, healthSettingsPending)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (!healthSettingsPending || Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
+            return
+        }
+        lifecycleScope.launch {
+            if (HealthConnectBackend.hasWritePermission(applicationContext)) {
+                completeHealthConnectEnable()
+            }
+        }
     }
 
     override fun onDestroy() {
