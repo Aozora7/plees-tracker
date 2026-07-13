@@ -84,6 +84,36 @@ class HealthConnectSyncTest {
     }
 
     @Test
+    fun testUnmatchedHistoricalRecordSurvivesSyncAndUnrelatedDeletion() = runBlocking {
+        val historical = sleep(1)
+        client.insertRecords(listOf(HealthConnectBackend.toRecord(historical)))
+
+        val current = sleep(2)
+        database.sleepDao().insert(current)
+        HealthConnectBackend.sync(client, packageName)
+
+        var records = HealthConnectBackend.readOwnRecords(client, packageName)
+        assertEquals(
+            setOf(historical.healthConnectId, current.healthConnectId),
+            records.mapNotNull { it.metadata.clientRecordId }
+                .map { it.removePrefix(HealthConnectBackend.CLIENT_ID_PREFIX) }
+                .toSet()
+        )
+
+        database.healthConnectDao().insertDeletions(
+            listOf(HealthConnectDeletion(current.healthConnectId))
+        )
+        database.sleepDao().delete(current)
+        HealthConnectBackend.sync(client, packageName)
+
+        records = HealthConnectBackend.readOwnRecords(client, packageName)
+        assertEquals(
+            listOf(HealthConnectBackend.CLIENT_ID_PREFIX + historical.healthConnectId),
+            records.mapNotNull { it.metadata.clientRecordId }
+        )
+    }
+
+    @Test
     fun testBatchingAndPagination() = runBlocking {
         database.sleepDao().insert((1..1001).map(::sleep))
 
