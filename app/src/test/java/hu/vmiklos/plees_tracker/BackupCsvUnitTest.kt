@@ -22,13 +22,21 @@ class BackupCsvUnitTest {
         sleep.rating = 3
         sleep.comment = "hi"
         sleep.wakes = 2
+        sleep.healthConnectId = "21e61dba-2d6a-43e8-b86d-21ad27ee7508"
+        sleep.healthConnectVersion = 7
 
         val os = ByteArrayOutputStream()
         DataModel.writeSleepsCsv(listOf(sleep), os, prettyBackup = false)
 
         val lines = os.toString("UTF-8").trim().split("\r\n")
-        assertEquals("sid,start,stop,rating,comment,wakes", lines[0])
-        assertEquals("0,10000,20000,3,hi,2", lines[1])
+        assertEquals(
+            "sid,start,stop,rating,comment,wakes,health_connect_id,health_connect_version",
+            lines[0]
+        )
+        assertEquals(
+            "0,10000,20000,3,hi,2,21e61dba-2d6a-43e8-b86d-21ad27ee7508,7",
+            lines[1]
+        )
     }
 }
 

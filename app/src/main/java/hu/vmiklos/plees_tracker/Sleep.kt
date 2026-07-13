@@ -9,12 +9,14 @@ package hu.vmiklos.plees_tracker
 import android.text.format.DateUtils
 import androidx.room.ColumnInfo
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
+import java.util.UUID
 
 /**
  * Represents one tracked sleep.
  */
-@Entity
+@Entity(indices = [Index(value = ["health_connect_id"], unique = true)])
 class Sleep {
     @PrimaryKey(autoGenerate = true)
     var sid: Int = 0
@@ -33,6 +35,12 @@ class Sleep {
 
     @ColumnInfo(name = "wakes")
     var wakes: Int = 0
+
+    @ColumnInfo(name = "health_connect_id")
+    var healthConnectId: String = UUID.randomUUID().toString()
+
+    @ColumnInfo(name = "health_connect_version")
+    var healthConnectVersion: Long = 0
 
     private val lengthMs
         get() = stop - start

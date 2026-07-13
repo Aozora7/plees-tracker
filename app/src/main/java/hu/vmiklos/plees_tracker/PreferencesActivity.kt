@@ -9,12 +9,16 @@ package hu.vmiklos.plees_tracker
 import android.app.TimePickerDialog
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.widget.Toast
+import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.edit
 import androidx.lifecycle.lifecycleScope
 import androidx.preference.PreferenceManager
 import kotlinx.coroutines.launch
@@ -52,8 +56,21 @@ class PreferencesActivity : AppCompatActivity() {
     // sign-in result adds a new destination instead.
     private var changeAccountFrom: BackupDestination.DriveAccount? = null
 
+    private var healthPermissionLauncher: ActivityResultLauncher<Set<String>>? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            healthPermissionLauncher = registerForActivityResult(
+                HealthConnectBackend.permissionContract()
+            ) { granted ->
+                if (granted.containsAll(HealthConnectBackend.requestedPermissions())) {
+                    completeHealthConnectEnable()
+                } else {
+                    refreshFragment()
+                }
+            }
+        }
         savedInstanceState?.let { state ->
             addDriveAfterFolder = state.getBoolean(STATE_ADD_DRIVE_AFTER_FOLDER)
             replaceFolderOnSignIn = state.getString(STATE_REPLACE_FOLDER_ON_SIGN_IN)
@@ -76,6 +93,86 @@ class PreferencesActivity : AppCompatActivity() {
         DataModel.handleWindowInsets(this)
 
         DataModel.preferencesActivity = this
+    }
+
+    fun requestHealthConnectPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
+            return
+        }
+        healthPermissionLauncher?.launch(HealthConnectBackend.requestedPermissions())
+    }
+
+    fun openHealthConnectProvider() {
+        try {
+            startActivity(HealthConnectBackend.providerUpdateIntent())
+        } catch (e: Exception) {
+            Log.e(TAG, "openHealthConnectProvider: $e")
+            startActivity(
+                Intent(
+                    Intent.ACTION_VIEW,
+                    Uri.parse(
+                        "https://play.google.com/store/apps/details?id=" +
+                            "com.google.android.apps.healthdata"
+                    )
+                )
+            )
+        }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.P)
+    private fun completeHealthConnectEnable() {
+        lifecycleScope.launch {
+            val preferences = PreferenceManager.getDefaultSharedPreferences(applicationContext)
+            val initialized = preferences.getBoolean(
+                HealthConnectBackend.INITIALIZED_KEY,
+                false
+            )
+            val previous = try {
+                HealthConnectBackend.previousSleeps(applicationContext)
+            } catch (e: Exception) {
+                Log.e(TAG, "completeHealthConnectEnable: $e")
+                refreshFragment()
+                return@launch
+            }
+            if (!initialized && !DataModel.hasSleeps() && previous.isNotEmpty()) {
+                showHealthConnectImportDialog(previous)
+            } else {
+                finishHealthConnectEnable()
+            }
+        }
+    }
+
+    private fun showHealthConnectImportDialog(sleeps: List<Sleep>) {
+        AlertDialog.Builder(this)
+            .setTitle(R.string.health_connect_import_title)
+            .setMessage(
+                resources.getQuantityString(
+                    R.plurals.health_connect_import_message,
+                    sleeps.size,
+                    sleeps.size
+                )
+            )
+            .setPositiveButton(R.string.health_connect_import) { _, _ ->
+                lifecycleScope.launch {
+                    DataModel.importHealthConnectSleeps(sleeps)
+                    finishHealthConnectEnable()
+                }
+            }
+            .setNegativeButton(R.string.health_connect_skip) { _, _ ->
+                finishHealthConnectEnable()
+            }
+            .setCancelable(false)
+            .show()
+    }
+
+    private fun finishHealthConnectEnable() {
+        val preferences = PreferenceManager.getDefaultSharedPreferences(applicationContext)
+        preferences.edit {
+            putBoolean(HealthConnectBackend.ENABLED_KEY, true)
+            putBoolean(HealthConnectBackend.INITIALIZED_KEY, true)
+        }
+        HealthConnectBackend.scheduleSync(applicationContext)
+        refreshFragment()
     }
 
     override fun onSaveInstanceState(outState: Bundle) {

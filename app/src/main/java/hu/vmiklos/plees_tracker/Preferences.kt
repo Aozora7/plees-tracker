@@ -6,8 +6,10 @@
 
 package hu.vmiklos.plees_tracker
 
+import android.os.Build
 import android.os.Bundle
 import androidx.appcompat.app.AlertDialog
+import androidx.core.content.edit
 import androidx.lifecycle.lifecycleScope
 import androidx.preference.Preference
 import androidx.preference.PreferenceCategory
@@ -29,6 +31,7 @@ class Preferences : PreferenceFragmentCompat() {
     override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
         setPreferencesFromResource(R.xml.preferences, rootKey)
         setupBackupPreferences()
+        setupHealthConnectPreference()
         val wakeup = findPreference<Preference>("wakeup")
         wakeup?.let {
             val preferences = DataModel.preferences
@@ -43,6 +46,76 @@ class Preferences : PreferenceFragmentCompat() {
             val value = preferences.getString("bedtime", "")
             if (value != null) {
                 it.summary = padMinute(value)
+            }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        refreshHealthConnectState()
+    }
+
+    private fun setupHealthConnectPreference() {
+        findPreference<SwitchPreference>(HealthConnectBackend.ENABLED_KEY)
+            ?.setOnPreferenceChangeListener { _, newValue ->
+                if (newValue != true) {
+                    HealthConnectBackend.cancelSync(requireContext())
+                    return@setOnPreferenceChangeListener true
+                }
+                when (HealthConnectBackend.availability(requireContext())) {
+                    HealthConnectBackend.Availability.UNAVAILABLE -> false
+                    HealthConnectBackend.Availability.UPDATE_REQUIRED -> {
+                        (activity as? PreferencesActivity)?.openHealthConnectProvider()
+                        false
+                    }
+                    HealthConnectBackend.Availability.AVAILABLE -> {
+                        (activity as? PreferencesActivity)?.requestHealthConnectPermission()
+                        false
+                    }
+                }
+            }
+    }
+
+    private fun refreshHealthConnectState() {
+        val preference = findPreference<SwitchPreference>(HealthConnectBackend.ENABLED_KEY)
+            ?: return
+        when (HealthConnectBackend.availability(requireContext())) {
+            HealthConnectBackend.Availability.UNAVAILABLE -> {
+                preference.isEnabled = false
+                preference.isChecked = false
+                preference.setSummary(R.string.settings_health_connect_unavailable)
+            }
+            HealthConnectBackend.Availability.UPDATE_REQUIRED -> {
+                preference.isEnabled = true
+                preference.isChecked = false
+                preference.setSummary(R.string.settings_health_connect_update)
+            }
+            HealthConnectBackend.Availability.AVAILABLE -> {
+                preference.isEnabled = true
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
+                    return
+                }
+                lifecycleScope.launch {
+                    val granted = HealthConnectBackend.hasWritePermission(requireContext())
+                    val stored = DataModel.preferences.getBoolean(
+                        HealthConnectBackend.ENABLED_KEY,
+                        false
+                    )
+                    if (stored && !granted) {
+                        DataModel.preferences.edit {
+                            putBoolean(HealthConnectBackend.ENABLED_KEY, false)
+                        }
+                        HealthConnectBackend.cancelSync(requireContext())
+                    }
+                    preference.isChecked = stored && granted
+                    preference.setSummary(
+                        if (preference.isChecked) {
+                            R.string.settings_health_connect_on
+                        } else {
+                            R.string.settings_health_connect_off
+                        }
+                    )
+                }
             }
         }
     }

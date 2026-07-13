@@ -276,6 +276,7 @@ class MainActivity : AppCompatActivity(), View.OnClickListener {
 
     override fun onStart() {
         super.onStart()
+        DataModel.scheduleHealthConnectSync()
         val intent = Intent(this, MainService::class.java)
         stopService(intent)
         val recyclerView = findViewById<RecyclerView>(R.id.sleeps)
