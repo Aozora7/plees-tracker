@@ -8,6 +8,7 @@ package hu.vmiklos.plees_tracker
 
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import androidx.appcompat.app.AlertDialog
 import androidx.core.content.edit
 import androidx.lifecycle.lifecycleScope
@@ -18,6 +19,9 @@ import androidx.preference.SwitchPreference
 import kotlinx.coroutines.launch
 
 class Preferences : PreferenceFragmentCompat() {
+    companion object {
+        private const val TAG = "Preferences"
+    }
 
     // Cached hasBackup state per email, loaded asynchronously on fragment start.
     private val driveHasBackup = mutableMapOf<String, Boolean>()
@@ -96,11 +100,26 @@ class Preferences : PreferenceFragmentCompat() {
                     return
                 }
                 lifecycleScope.launch {
-                    val granted = HealthConnectBackend.hasWritePermission(requireContext())
                     val stored = DataModel.preferences.getBoolean(
                         HealthConnectBackend.ENABLED_KEY,
                         false
                     )
+                    val granted = try {
+                        HealthConnectBackend.hasWritePermission(requireContext())
+                    } catch (e: Exception) {
+                        Log.e(TAG, "refreshHealthConnectState: $e")
+                        // A transient provider error is not a revocation. Preserve the user's
+                        // opt-in and let the worker retry synchronization later.
+                        preference.isChecked = stored
+                        preference.setSummary(
+                            if (stored) {
+                                R.string.settings_health_connect_on
+                            } else {
+                                R.string.settings_health_connect_off
+                            }
+                        )
+                        return@launch
+                    }
                     if (stored && !granted) {
                         DataModel.preferences.edit {
                             putBoolean(HealthConnectBackend.ENABLED_KEY, false)
