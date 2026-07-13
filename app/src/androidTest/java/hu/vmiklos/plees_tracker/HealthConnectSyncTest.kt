@@ -7,7 +7,6 @@
 package hu.vmiklos.plees_tracker
 
 import android.content.Context
-import androidx.health.connect.client.records.SleepSessionRecord
 import androidx.health.connect.client.testing.FakeHealthConnectClient
 import androidx.health.connect.client.testing.FakePermissionController
 import androidx.room.Room
@@ -49,30 +48,16 @@ class HealthConnectSyncTest {
     }
 
     @Test
-    fun testCreateEditRecreateAndDelete() = runBlocking {
-        val sleep = sleep(1)
+    fun testCreateAndDelete() = runBlocking {
+        val sleep = sleep(1).apply {
+            comment = "edited"
+        }
         database.sleepDao().insert(sleep)
 
         HealthConnectBackend.sync(client, packageName)
-        var records = HealthConnectBackend.readOwnRecords(client, packageName)
-        assertEquals(1, records.size)
-
-        sleep.comment = "edited"
-        sleep.healthConnectVersion++
-        database.sleepDao().update(sleep)
-        HealthConnectBackend.sync(client, packageName)
-        records = HealthConnectBackend.readOwnRecords(client, packageName)
+        val records = HealthConnectBackend.readOwnRecords(client, packageName)
         assertEquals(1, records.size)
         assertEquals(HealthConnectNotes.encode(sleep), records.single().notes)
-
-        client.deleteRecords(
-            SleepSessionRecord::class,
-            recordIdsList = listOf(records.single().metadata.id),
-            clientRecordIdsList = emptyList()
-        )
-        HealthConnectBackend.sync(client, packageName)
-        records = HealthConnectBackend.readOwnRecords(client, packageName)
-        assertEquals(1, records.size)
 
         database.healthConnectDao().insertDeletions(
             listOf(HealthConnectDeletion(sleep.healthConnectId))

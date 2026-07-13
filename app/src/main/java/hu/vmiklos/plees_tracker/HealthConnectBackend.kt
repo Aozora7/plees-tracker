@@ -29,6 +29,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import java.time.Instant
 import java.util.UUID
+import androidx.core.net.toUri
 
 /** Health Connect availability, permission, scheduling, and record synchronization. */
 object HealthConnectBackend {
@@ -83,7 +84,7 @@ object HealthConnectBackend {
     }
 
     fun providerUpdateIntent(): Intent = Intent(Intent.ACTION_VIEW).apply {
-        data = Uri.parse("market://details?id=$PROVIDER_PACKAGE_NAME")
+        data = "market://details?id=$PROVIDER_PACKAGE_NAME".toUri()
         setPackage("com.android.vending")
     }
 
