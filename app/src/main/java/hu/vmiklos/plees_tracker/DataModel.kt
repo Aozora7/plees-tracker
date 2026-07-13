@@ -25,6 +25,7 @@ import androidx.lifecycle.LiveData
 import androidx.lifecycle.switchMap
 import androidx.room.Room
 import androidx.room.migration.Migration
+import androidx.room.withTransaction
 import androidx.sqlite.db.SupportSQLiteDatabase
 import hu.vmiklos.plees_tracker.calendar.CalendarExport
 import hu.vmiklos.plees_tracker.calendar.CalendarImport
@@ -39,6 +40,7 @@ import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+import java.util.UUID
 import kotlin.math.roundToLong
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -61,6 +63,31 @@ val MIGRATION_2_3 = object : Migration(2, 3) {
 val MIGRATION_3_4 = object : Migration(3, 4) {
     override fun migrate(db: SupportSQLiteDatabase) {
         db.execSQL("ALTER TABLE sleep ADD COLUMN wakes INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
+val MIGRATION_4_5 = object : Migration(4, 5) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "ALTER TABLE sleep ADD COLUMN health_connect_id TEXT NOT NULL DEFAULT ''"
+        )
+        db.execSQL(
+            "UPDATE sleep SET health_connect_id = " +
+                "lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-' || " +
+                "lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(2))) || '-' || " +
+                "lower(hex(randomblob(6)))"
+        )
+        db.execSQL(
+            "ALTER TABLE sleep ADD COLUMN health_connect_version INTEGER NOT NULL DEFAULT 0"
+        )
+        db.execSQL(
+            "CREATE UNIQUE INDEX index_Sleep_health_connect_id " +
+                "ON sleep(health_connect_id)"
+        )
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS health_connect_deletion " +
+                "(health_connect_id TEXT NOT NULL, PRIMARY KEY(health_connect_id))"
+        )
     }
 }
 
@@ -89,6 +116,8 @@ object DataModel {
 
     lateinit var database: AppDatabase
 
+    private lateinit var appContext: Context
+
     val sleepsLive: LiveData<List<Sleep>>
         get() = database.sleepDao().getAllLive()
 
@@ -100,6 +129,7 @@ object DataModel {
         }
 
         this.preferences = preferences
+        appContext = context.applicationContext
 
         val start = preferences.getLong("start", 0)
         if (start > 0) {
@@ -111,6 +141,7 @@ object DataModel {
             .addMigrations(MIGRATION_1_2)
             .addMigrations(MIGRATION_2_3)
             .addMigrations(MIGRATION_3_4)
+            .addMigrations(MIGRATION_4_5)
             .build()
         initialized = true
         migrateFromSingleDestination()
@@ -205,26 +236,58 @@ object DataModel {
         preferences.edit {
             remove("start")
         }
+        scheduleHealthConnectSync()
     }
 
     suspend fun insertSleep(sleep: Sleep) {
-        database.sleepDao().insert(sleep)
+        database.withTransaction {
+            database.healthConnectDao().deleteDeletions(listOf(sleep.healthConnectId))
+            database.sleepDao().insert(sleep)
+        }
+        scheduleHealthConnectSync()
     }
 
     private suspend fun insertSleeps(sleepList: List<Sleep>) {
-        database.sleepDao().insert(sleepList)
+        if (sleepList.isEmpty()) {
+            return
+        }
+        database.withTransaction {
+            database.healthConnectDao().deleteDeletions(
+                sleepList.map { it.healthConnectId }
+            )
+            database.sleepDao().insert(sleepList)
+        }
     }
 
     suspend fun updateSleep(sleep: Sleep) {
+        sleep.healthConnectVersion++
         database.sleepDao().update(sleep)
+        scheduleHealthConnectSync()
     }
 
     suspend fun deleteSleep(sleep: Sleep) {
-        database.sleepDao().delete(sleep)
+        database.withTransaction {
+            database.healthConnectDao().insertDeletions(listOf(deletionFor(sleep)))
+            database.sleepDao().delete(sleep)
+        }
+        scheduleHealthConnectSync()
     }
 
     suspend fun deleteAllSleep() {
-        database.sleepDao().deleteAll()
+        database.withTransaction {
+            val sleeps = database.sleepDao().getAll()
+            database.healthConnectDao().insertDeletions(sleeps.map(::deletionFor))
+            database.sleepDao().deleteAll()
+        }
+        scheduleHealthConnectSync()
+    }
+
+    private fun deletionFor(sleep: Sleep): HealthConnectDeletion = HealthConnectDeletion().apply {
+        healthConnectId = sleep.healthConnectId
+    }
+
+    fun scheduleHealthConnectSync() {
+        HealthConnectBackend.scheduleSync(appContext)
     }
 
     suspend fun getSleepById(sid: Int): Sleep {
@@ -301,6 +364,18 @@ object DataModel {
                 if (cells.isSet(5)) {
                     sleep.wakes = cells[5].toIntOrNull() ?: 0
                 }
+                if (cells.isSet(6)) {
+                    val id = cells[6]
+                    try {
+                        UUID.fromString(id)
+                        sleep.healthConnectId = id
+                    } catch (_: IllegalArgumentException) {
+                        // Keep the freshly-generated ID for invalid or legacy values.
+                    }
+                }
+                if (cells.isSet(7)) {
+                    sleep.healthConnectVersion = cells[7].toLongOrNull()?.coerceAtLeast(0) ?: 0
+                }
                 importedSleeps.add(sleep)
             }
             importedSleeps
@@ -318,8 +393,19 @@ object DataModel {
      */
     private suspend fun insertNewSleeps(importedSleeps: List<Sleep>) {
         val oldSleeps = database.sleepDao().getAll()
-        val newSleeps = importedSleeps.subtract(oldSleeps.toSet())
-        database.sleepDao().insert(newSleeps.toList())
+        val usedIds = oldSleeps.mapTo(mutableSetOf()) { it.healthConnectId }
+        val newSleeps = importedSleeps.subtract(oldSleeps.toSet()).onEach { sleep ->
+            while (!usedIds.add(sleep.healthConnectId)) {
+                sleep.healthConnectId = UUID.randomUUID().toString()
+                sleep.healthConnectVersion = 0
+            }
+        }
+        insertSleeps(newSleeps.toList())
+        scheduleHealthConnectSync()
+    }
+
+    suspend fun importHealthConnectSleeps(sleeps: List<Sleep>) {
+        insertNewSleeps(sleeps)
     }
 
     /**
@@ -355,6 +441,7 @@ object DataModel {
 
         // Insert the list of Sleep into DB
         insertSleeps(newSleeps.toList())
+        scheduleHealthConnectSync()
 
         // Show how many sleeps were imported.
         val text = context.resources.getQuantityString(
@@ -556,9 +643,15 @@ object DataModel {
     fun writeSleepsCsv(sleeps: List<Sleep>, os: OutputStream, prettyBackup: Boolean) {
         val writer = CSVPrinter(OutputStreamWriter(os, "UTF-8"), CSVFormat.DEFAULT)
         if (prettyBackup) {
-            writer.printRecord("sid", "start", "stop", "length", "rating", "comment", "wakes")
+            writer.printRecord(
+                "sid", "start", "stop", "length", "rating", "comment", "wakes",
+                "health_connect_id", "health_connect_version"
+            )
         } else {
-            writer.printRecord("sid", "start", "stop", "rating", "comment", "wakes")
+            writer.printRecord(
+                "sid", "start", "stop", "rating", "comment", "wakes",
+                "health_connect_id", "health_connect_version"
+            )
         }
         for (sleep in sleeps) {
             if (prettyBackup) {
@@ -571,7 +664,9 @@ object DataModel {
                     formatDuration(durationMS / 1000, getCompactView()),
                     sleep.rating,
                     sleep.comment,
-                    sleep.wakes
+                    sleep.wakes,
+                    sleep.healthConnectId,
+                    sleep.healthConnectVersion
                 )
             } else {
                 writer.printRecord(
@@ -580,7 +675,9 @@ object DataModel {
                     sleep.stop,
                     sleep.rating,
                     sleep.comment,
-                    sleep.wakes
+                    sleep.wakes,
+                    sleep.healthConnectId,
+                    sleep.healthConnectVersion
                 )
             }
         }

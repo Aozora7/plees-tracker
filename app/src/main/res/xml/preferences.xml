@@ -41,6 +41,16 @@
             android:title="@string/settings_pretty_backup" />
     </PreferenceCategory>
 
+    <PreferenceCategory
+        android:key="health_connect_category"
+        android:title="@string/settings_health_connect_category">
+        <SwitchPreference
+            android:defaultValue="false"
+            android:key="health_connect_enabled"
+            android:summary="@string/settings_health_connect_off"
+            android:title="@string/settings_health_connect" />
+    </PreferenceCategory>
+
     <PreferenceCategory android:title="@string/settings_category_dashboard">
         <ListPreference
             android:key="dashboard_duration"

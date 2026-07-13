@@ -20,6 +20,28 @@ import org.junit.Test
  */
 class DataModelUnitTest {
     @Test
+    fun testParseLegacySleepCsvGeneratesHealthConnectIdentity() = runBlocking {
+        val csv = "sid,start,stop,rating,comment,wakes\n0,10000,20000,3,hi,2\n"
+
+        val sleep = DataModel.parseSleepsCsv(StringReader(csv))?.single() ?: Sleep()
+
+        assertTrue(sleep.healthConnectId.isNotEmpty())
+        assertEquals(0L, sleep.healthConnectVersion)
+    }
+
+    @Test
+    fun testParseSleepCsvPreservesHealthConnectIdentity() = runBlocking {
+        val id = "21e61dba-2d6a-43e8-b86d-21ad27ee7508"
+        val csv = "sid,start,stop,rating,comment,wakes,health_connect_id," +
+            "health_connect_version\n0,10000,20000,3,hi,2,$id,7\n"
+
+        val sleep = DataModel.parseSleepsCsv(StringReader(csv))?.single() ?: Sleep()
+
+        assertEquals(id, sleep.healthConnectId)
+        assertEquals(7L, sleep.healthConnectVersion)
+    }
+
+    @Test
     fun testFormatDuration() {
         val actual = DataModel.formatDuration(61, false)
         assertEquals("0:01:01", actual)
