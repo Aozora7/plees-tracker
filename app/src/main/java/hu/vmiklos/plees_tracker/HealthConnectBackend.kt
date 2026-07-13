@@ -8,6 +8,7 @@ package hu.vmiklos.plees_tracker
 
 import android.content.Context
 import android.content.Intent
+import android.health.connect.HealthConnectManager
 import android.net.Uri
 import android.os.Build
 import android.util.Log
@@ -33,6 +34,7 @@ import java.util.UUID
 object HealthConnectBackend {
     const val ENABLED_KEY = "health_connect_enabled"
     const val INITIALIZED_KEY = "health_connect_initialized"
+    const val PERMISSION_REQUESTED_KEY = "health_connect_permission_requested"
 
     internal const val CLIENT_ID_PREFIX = "plees-sleep:"
     private const val PROVIDER_PACKAGE_NAME = "com.google.android.apps.healthdata"
@@ -83,6 +85,15 @@ object HealthConnectBackend {
     fun providerUpdateIntent(): Intent = Intent(Intent.ACTION_VIEW).apply {
         data = Uri.parse("market://details?id=$PROVIDER_PACKAGE_NAME")
         setPackage("com.android.vending")
+    }
+
+    fun permissionSettingsIntent(context: Context): Intent {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            return Intent(HealthConnectManager.ACTION_MANAGE_HEALTH_PERMISSIONS).apply {
+                putExtra(Intent.EXTRA_PACKAGE_NAME, context.packageName)
+            }
+        }
+        return Intent(HealthConnectClient.ACTION_HEALTH_CONNECT_SETTINGS)
     }
 
     @RequiresApi(Build.VERSION_CODES.P)
