@@ -99,6 +99,21 @@ class HealthConnectSyncTest {
     }
 
     @Test
+    fun testBatchedDeletionStateCleanup() = runBlocking {
+        val deletions = (1..2300).map { index ->
+            HealthConnectDeletion(
+                UUID.nameUUIDFromBytes(index.toString().toByteArray()).toString()
+            )
+        }
+        val dao = database.healthConnectDao()
+        dao.insertDeletions(deletions)
+
+        dao.deleteDeletionsBatched(deletions.map { it.healthConnectId })
+
+        assertEquals(0, dao.getDeletions().size)
+    }
+
+    @Test
     fun testBatchingAndPagination() = runBlocking {
         database.sleepDao().insert((1..1001).map(::sleep))
 

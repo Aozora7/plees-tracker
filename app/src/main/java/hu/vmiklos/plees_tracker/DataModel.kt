@@ -252,7 +252,7 @@ object DataModel {
             return
         }
         database.withTransaction {
-            database.healthConnectDao().deleteDeletions(
+            database.healthConnectDao().deleteDeletionsBatched(
                 sleepList.map { it.healthConnectId }
             )
             database.sleepDao().insert(sleepList)

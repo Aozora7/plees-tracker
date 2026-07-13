@@ -62,6 +62,9 @@ class PreferencesActivity : AppCompatActivity() {
     // lets a permission granted there complete the opt-in when the user returns to Plees.
     private var healthSettingsPending = false
 
+    // Prevent duplicate history checks when activity resume and the permission callback race.
+    private var healthEnableInProgress = false
+
     private var healthPermissionLauncher: ActivityResultLauncher<Set<String>>? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -111,21 +114,33 @@ class PreferencesActivity : AppCompatActivity() {
             return
         }
         lifecycleScope.launch {
-            if (HealthConnectBackend.hasWritePermission(applicationContext)) {
-                completeHealthConnectEnable()
-                return@launch
-            }
             val requested = DataModel.preferences.getBoolean(
                 HealthConnectBackend.PERMISSION_REQUESTED_KEY,
                 false
             )
-            if (requested) {
-                showHealthConnectPermissionDeniedDialog()
-            } else {
+            if (!requested) {
                 healthPermissionLauncher?.launch(HealthConnectBackend.requestedPermissions())
+                return@launch
+            }
+            when (hasHealthConnectWritePermission()) {
+                true -> completeHealthConnectEnable()
+                false -> showHealthConnectPermissionDeniedDialog()
+                null -> {
+                    refreshFragment()
+                    toast(R.string.health_connect_temporarily_unavailable)
+                }
             }
         }
     }
+
+    @RequiresApi(Build.VERSION_CODES.P)
+    private suspend fun hasHealthConnectWritePermission(): Boolean? =
+        try {
+            HealthConnectBackend.hasWritePermission(applicationContext)
+        } catch (e: Exception) {
+            Log.e(TAG, "hasHealthConnectWritePermission: $e")
+            null
+        }
 
     private fun showHealthConnectPermissionDeniedDialog() {
         AlertDialog.Builder(this)
@@ -174,23 +189,40 @@ class PreferencesActivity : AppCompatActivity() {
 
     @RequiresApi(Build.VERSION_CODES.P)
     private fun completeHealthConnectEnable() {
+        if (healthEnableInProgress) {
+            return
+        }
+        healthEnableInProgress = true
         lifecycleScope.launch {
-            val preferences = PreferenceManager.getDefaultSharedPreferences(applicationContext)
-            val initialized = preferences.getBoolean(
-                HealthConnectBackend.INITIALIZED_KEY,
-                false
-            )
-            val previous = try {
-                HealthConnectBackend.previousSleeps(applicationContext)
-            } catch (e: Exception) {
-                Log.e(TAG, "completeHealthConnectEnable: $e")
-                refreshFragment()
-                return@launch
-            }
-            if (!initialized && !DataModel.hasSleeps() && previous.isNotEmpty()) {
-                showHealthConnectImportDialog(previous)
-            } else {
-                finishHealthConnectEnable()
+            try {
+                val preferences = PreferenceManager.getDefaultSharedPreferences(applicationContext)
+                val initialized = preferences.getBoolean(
+                    HealthConnectBackend.INITIALIZED_KEY,
+                    false
+                )
+                if (initialized || DataModel.hasSleeps()) {
+                    finishHealthConnectEnable()
+                    return@launch
+                }
+                val previous = try {
+                    HealthConnectBackend.previousSleeps(applicationContext)
+                } catch (e: Exception) {
+                    Log.e(TAG, "completeHealthConnectEnable: $e")
+                    // Permission was granted, so keep the opt-in. Leaving INITIALIZED_KEY false
+                    // makes a later settings resume retry the one-time history inspection.
+                    preferences.edit {
+                        putBoolean(HealthConnectBackend.ENABLED_KEY, true)
+                    }
+                    refreshFragment()
+                    return@launch
+                }
+                if (previous.isNotEmpty()) {
+                    showHealthConnectImportDialog(previous)
+                } else {
+                    finishHealthConnectEnable()
+                }
+            } finally {
+                healthEnableInProgress = false
             }
         }
     }
@@ -242,12 +274,23 @@ class PreferencesActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (!healthSettingsPending || Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
             return
         }
         lifecycleScope.launch {
-            if (HealthConnectBackend.hasWritePermission(applicationContext)) {
-                completeHealthConnectEnable()
+            if (healthSettingsPending) {
+                when (hasHealthConnectWritePermission()) {
+                    true -> completeHealthConnectEnable()
+                    false -> healthSettingsPending = false
+                    null -> return@launch
+                }
+            } else {
+                val preferences = PreferenceManager.getDefaultSharedPreferences(applicationContext)
+                if (preferences.getBoolean(HealthConnectBackend.ENABLED_KEY, false) &&
+                    !preferences.getBoolean(HealthConnectBackend.INITIALIZED_KEY, false)
+                ) {
+                    completeHealthConnectEnable()
+                }
             }
         }
     }

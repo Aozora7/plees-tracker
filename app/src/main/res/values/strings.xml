@@ -65,6 +65,7 @@
     <string name="settings_health_connect_update">Install or update Health Connect to enable</string>
     <string name="health_connect_permission_denied_title">Health Connect permission required</string>
     <string name="health_connect_permission_denied_message">Sleep access was not granted. Allow Plees Tracker to write sleep data in Health Connect settings to enable synchronization.</string>
+    <string name="health_connect_temporarily_unavailable">Health Connect is temporarily unavailable. Try again later.</string>
     <string name="health_connect_open_settings">Open Health Connect</string>
     <string name="health_connect_import_title">Previous sleeps found</string>
     <plurals name="health_connect_import_message">

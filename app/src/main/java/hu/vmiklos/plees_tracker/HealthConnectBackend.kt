@@ -167,7 +167,7 @@ object HealthConnectBackend {
                     clientRecordIdsList = emptyList()
                 )
             }
-            healthDao.deleteDeletions(chunk)
+            healthDao.deleteDeletionsBatched(chunk)
         }
 
         val recordsToWrite = mutableListOf<SleepSessionRecord>()

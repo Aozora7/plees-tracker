@@ -23,11 +23,19 @@ interface HealthConnectDao {
     @Query("DELETE FROM health_connect_deletion WHERE health_connect_id IN (:ids)")
     suspend fun deleteDeletions(ids: List<String>)
 
+    suspend fun deleteDeletionsBatched(ids: List<String>) {
+        for (chunk in ids.chunked(SQLITE_BIND_PARAMETER_LIMIT)) {
+            deleteDeletions(chunk)
+        }
+    }
+
     @Query(
         "UPDATE sleep SET health_connect_version = :version " +
             "WHERE health_connect_id = :id"
     )
     suspend fun updateVersion(id: String, version: Long)
 }
+
+private const val SQLITE_BIND_PARAMETER_LIMIT = 999
 
 /* vim:set shiftwidth=4 softtabstop=4 expandtab: */
