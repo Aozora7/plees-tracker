@@ -12,7 +12,6 @@ import android.os.Bundle
 import android.util.Log
 import android.view.View
 import androidx.appcompat.app.AlertDialog
-import androidx.core.content.edit
 import androidx.lifecycle.lifecycleScope
 import androidx.preference.Preference
 import androidx.preference.PreferenceCategory
@@ -79,22 +78,20 @@ class Preferences : PreferenceFragmentCompat() {
 
     private fun setupHealthConnectPreference() {
         val category = findPreference<PreferenceCategory>("health_connect_category") ?: return
-        val xmlPreference = findPreference<SwitchPreference>(HealthConnectBackend.ENABLED_KEY)
-            ?: return
         val healthConnectPreference = HealthConnectSwitchPreference(requireContext()).apply {
             key = HealthConnectBackend.ENABLED_KEY
-            order = xmlPreference.order
-            setDefaultValue(false)
+            order = 0
+            isPersistent = false
             setTitle(R.string.settings_health_connect)
             setSummary(R.string.settings_health_connect_off)
         }
-        category.removePreference(xmlPreference)
         category.addPreference(healthConnectPreference)
         healthConnectPreference.setOnPreferenceChangeListener { _, newValue ->
             if ((activity as? PreferencesActivity)?.healthConnectCheckPending == true) {
                 return@setOnPreferenceChangeListener false
             }
             if (newValue != true) {
+                HealthConnectBackend.setEnabled(requireContext(), false)
                 HealthConnectBackend.cancelSync(requireContext())
                 return@setOnPreferenceChangeListener true
             }
@@ -141,9 +138,8 @@ class Preferences : PreferenceFragmentCompat() {
         findPreference<Preference>(PreferencesActivity.HEALTH_CONNECT_CHECK_ACTIONS_KEY)
             ?.isVisible = checking
         if (checking) {
-            // Reflect the attempted opt-in without persisting ENABLED_KEY until the check or an
-            // explicit skip completes.
-            preference.isPersistent = false
+            // Reflect the attempted opt-in without enabling synchronization until the check or
+            // an explicit skip completes.
             preference.isChecked = true
             // Disabling the entire preference would also dim its status message. Disable only the
             // switch widget, while the change listener keeps the row inert.
@@ -152,15 +148,16 @@ class Preferences : PreferenceFragmentCompat() {
             preference.setSummary(R.string.settings_health_connect_checking)
             return
         }
-        preference.isPersistent = true
         preference.checkPending = false
         when (HealthConnectBackend.availability(requireContext())) {
             HealthConnectBackend.Availability.UNAVAILABLE -> {
+                HealthConnectBackend.setEnabled(requireContext(), false)
                 preference.isEnabled = false
                 preference.isChecked = false
                 preference.setSummary(R.string.settings_health_connect_unavailable)
             }
             HealthConnectBackend.Availability.UPDATE_REQUIRED -> {
+                HealthConnectBackend.setEnabled(requireContext(), false)
                 preference.isEnabled = true
                 preference.isChecked = false
                 preference.setSummary(R.string.settings_health_connect_update)
@@ -171,10 +168,7 @@ class Preferences : PreferenceFragmentCompat() {
                     return
                 }
                 lifecycleScope.launch {
-                    val stored = DataModel.preferences.getBoolean(
-                        HealthConnectBackend.ENABLED_KEY,
-                        false
-                    )
+                    val stored = HealthConnectBackend.isEnabled(requireContext())
                     val knownGranted = (activity as? PreferencesActivity)
                         ?.healthConnectPermissionKnownGranted == true
                     val granted = if (knownGranted) {
@@ -198,9 +192,7 @@ class Preferences : PreferenceFragmentCompat() {
                         }
                     }
                     if (stored && !granted) {
-                        DataModel.preferences.edit {
-                            putBoolean(HealthConnectBackend.ENABLED_KEY, false)
-                        }
+                        HealthConnectBackend.setEnabled(requireContext(), false)
                         HealthConnectBackend.cancelSync(requireContext())
                     }
                     preference.isChecked = stored && granted

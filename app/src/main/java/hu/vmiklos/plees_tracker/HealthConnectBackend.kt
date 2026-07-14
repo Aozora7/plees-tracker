@@ -8,6 +8,7 @@ package hu.vmiklos.plees_tracker
 
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.health.connect.HealthConnectManager
 import android.os.Build
 import android.util.Log
@@ -23,7 +24,6 @@ import androidx.health.connect.client.records.metadata.Device
 import androidx.health.connect.client.records.metadata.Metadata
 import androidx.health.connect.client.request.ReadRecordsRequest
 import androidx.health.connect.client.time.TimeRangeFilter
-import androidx.preference.PreferenceManager
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
@@ -38,7 +38,9 @@ object HealthConnectBackend {
     const val INITIALIZED_KEY = "health_connect_initialized"
     const val PERMISSION_REQUESTED_KEY = "health_connect_permission_requested"
 
+    internal const val CHECK_PENDING_KEY = "health_connect_check_pending"
     internal const val CLIENT_ID_PREFIX = "plees-sleep:"
+    internal const val LOCAL_PREFERENCES_NAME = "health_connect_local"
     internal const val READ_CUTOFF_KEY = "health_connect_read_cutoff"
     private const val PROVIDER_PACKAGE_NAME = "com.google.android.apps.healthdata"
     private const val WORK_NAME = "health_connect_sync"
@@ -67,9 +69,17 @@ object HealthConnectBackend {
         else -> Availability.UNAVAILABLE
     }
 
+    internal fun localPreferences(context: Context): SharedPreferences =
+        context.getSharedPreferences(LOCAL_PREFERENCES_NAME, Context.MODE_PRIVATE)
+
     fun isEnabled(context: Context): Boolean =
-        PreferenceManager.getDefaultSharedPreferences(context)
-            .getBoolean(ENABLED_KEY, false)
+        localPreferences(context).getBoolean(ENABLED_KEY, false)
+
+    internal fun setEnabled(context: Context, enabled: Boolean) {
+        localPreferences(context).edit()
+            .putBoolean(ENABLED_KEY, enabled)
+            .apply()
+    }
 
     fun scheduleSync(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || !isEnabled(context)) {
@@ -128,7 +138,7 @@ object HealthConnectBackend {
         if (canReadAllHistory(sdkInt)) {
             return
         }
-        val preferences = PreferenceManager.getDefaultSharedPreferences(context)
+        val preferences = localPreferences(context)
         if (!preferences.contains(READ_CUTOFF_KEY)) {
             preferences.edit()
                 .putLong(READ_CUTOFF_KEY, grantedAtMillis - LEGACY_READ_MILLIS)
@@ -146,7 +156,7 @@ object HealthConnectBackend {
             return Instant.EPOCH
         }
         recordPermissionGrant(context, nowMillis, sdkInt)
-        val cutoff = PreferenceManager.getDefaultSharedPreferences(context)
+        val cutoff = localPreferences(context)
             .getLong(READ_CUTOFF_KEY, nowMillis - LEGACY_READ_MILLIS)
         return Instant.ofEpochMilli(cutoff)
     }

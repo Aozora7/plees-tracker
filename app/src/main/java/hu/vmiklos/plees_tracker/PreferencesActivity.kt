@@ -20,6 +20,7 @@ import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.edit
+import androidx.core.net.toUri
 import androidx.health.connect.client.HealthConnectClient
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
@@ -31,7 +32,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
-import androidx.core.net.toUri
 
 class PreferencesActivity : AppCompatActivity() {
     companion object {
@@ -48,9 +48,10 @@ class PreferencesActivity : AppCompatActivity() {
         private const val HEALTH_CONNECT_READ_TIMEOUT_MS = 30_000L
         private const val HEALTH_CONNECT_RETRY_INITIAL_DELAY_MS = 1_000L
         private const val HEALTH_CONNECT_RETRY_MAX_DELAY_MS = 30_000L
+        private const val HEALTH_CONNECT_APP_URL =
+            "https://play.google.com/store/apps/details?id=com.google.android.apps.healthdata"
 
         internal const val HEALTH_CONNECT_CHECK_ACTIONS_KEY = "health_connect_check_actions"
-        private const val HEALTH_CONNECT_CHECK_PENDING_KEY = "health_connect_check_pending"
     }
 
     // Pending state of an in-flight folder-picker or Drive sign-in flow. The system activities
@@ -101,7 +102,7 @@ class PreferencesActivity : AppCompatActivity() {
             healthPermissionLauncher = registerForActivityResult(
                 HealthConnectBackend.permissionContract()
             ) { granted ->
-                DataModel.preferences.edit {
+                HealthConnectBackend.localPreferences(applicationContext).edit {
                     putBoolean(HealthConnectBackend.PERMISSION_REQUESTED_KEY, true)
                 }
                 if (granted.containsAll(HealthConnectBackend.requestedPermissions())) {
@@ -127,9 +128,8 @@ class PreferencesActivity : AppCompatActivity() {
             }
             healthSettingsPending = state.getBoolean(STATE_HEALTH_SETTINGS_PENDING)
         }
-        val persistedCheckPending = PreferenceManager
-            .getDefaultSharedPreferences(applicationContext)
-            .getBoolean(HEALTH_CONNECT_CHECK_PENDING_KEY, false)
+        val persistedCheckPending = HealthConnectBackend.localPreferences(applicationContext)
+            .getBoolean(HealthConnectBackend.CHECK_PENDING_KEY, false)
         healthConnectCheckPending = savedInstanceState?.getBoolean(
             STATE_HEALTH_CHECK_PENDING,
             persistedCheckPending
@@ -150,10 +150,8 @@ class PreferencesActivity : AppCompatActivity() {
             return
         }
         lifecycleScope.launch {
-            val requested = DataModel.preferences.getBoolean(
-                HealthConnectBackend.PERMISSION_REQUESTED_KEY,
-                false
-            )
+            val requested = HealthConnectBackend.localPreferences(applicationContext)
+                .getBoolean(HealthConnectBackend.PERMISSION_REQUESTED_KEY, false)
             if (!requested) {
                 healthPermissionLauncher?.launch(HealthConnectBackend.requestedPermissions())
                 return@launch
@@ -214,10 +212,7 @@ class PreferencesActivity : AppCompatActivity() {
         } catch (e: Exception) {
             Log.e(TAG, "openHealthConnectProvider: $e")
             startActivity(
-                Intent(
-                    Intent.ACTION_VIEW,
-                    ("https://play.google.com/store/apps/details?id=com.google.android.apps.healthdata").toUri()
-                )
+                Intent(Intent.ACTION_VIEW, (HEALTH_CONNECT_APP_URL).toUri())
             )
         }
     }
@@ -225,7 +220,7 @@ class PreferencesActivity : AppCompatActivity() {
     @RequiresApi(Build.VERSION_CODES.P)
     private fun completeHealthConnectEnable() {
         HealthConnectBackend.recordPermissionGrant(applicationContext)
-        val preferences = PreferenceManager.getDefaultSharedPreferences(applicationContext)
+        val preferences = HealthConnectBackend.localPreferences(applicationContext)
         if (preferences.getBoolean(HealthConnectBackend.INITIALIZED_KEY, false)) {
             finishHealthConnectEnable()
             return
@@ -241,8 +236,8 @@ class PreferencesActivity : AppCompatActivity() {
 
     private fun setHealthConnectCheckPending(pending: Boolean) {
         healthConnectCheckPending = pending
-        PreferenceManager.getDefaultSharedPreferences(applicationContext).edit {
-            putBoolean(HEALTH_CONNECT_CHECK_PENDING_KEY, pending)
+        HealthConnectBackend.localPreferences(applicationContext).edit {
+            putBoolean(HealthConnectBackend.CHECK_PENDING_KEY, pending)
         }
     }
 
@@ -274,7 +269,7 @@ class PreferencesActivity : AppCompatActivity() {
                         Log.e(TAG, "Health Connect permission lost during history check: $e")
                         healthConnectPermissionKnownGranted = false
                         stopHealthConnectHistoryCheck(cancelJob = false)
-                        PreferenceManager.getDefaultSharedPreferences(applicationContext).edit {
+                        HealthConnectBackend.localPreferences(applicationContext).edit {
                             putBoolean(HealthConnectBackend.ENABLED_KEY, false)
                             putBoolean(HealthConnectBackend.INITIALIZED_KEY, false)
                         }
@@ -356,7 +351,7 @@ class PreferencesActivity : AppCompatActivity() {
         }
         stopHealthConnectHistoryCheck()
         healthSettingsPending = false
-        PreferenceManager.getDefaultSharedPreferences(applicationContext).edit {
+        HealthConnectBackend.localPreferences(applicationContext).edit {
             putBoolean(HealthConnectBackend.ENABLED_KEY, false)
             putBoolean(HealthConnectBackend.INITIALIZED_KEY, false)
         }
@@ -445,7 +440,7 @@ class PreferencesActivity : AppCompatActivity() {
     private fun finishHealthConnectEnable() {
         stopHealthConnectHistoryCheck()
         healthSettingsPending = false
-        val preferences = PreferenceManager.getDefaultSharedPreferences(applicationContext)
+        val preferences = HealthConnectBackend.localPreferences(applicationContext)
         preferences.edit {
             putBoolean(HealthConnectBackend.ENABLED_KEY, true)
             putBoolean(HealthConnectBackend.INITIALIZED_KEY, true)
@@ -507,7 +502,7 @@ class PreferencesActivity : AppCompatActivity() {
                     null -> return@launch
                 }
             } else {
-                val preferences = PreferenceManager.getDefaultSharedPreferences(applicationContext)
+                val preferences = HealthConnectBackend.localPreferences(applicationContext)
                 if (preferences.getBoolean(HealthConnectBackend.ENABLED_KEY, false) &&
                     !preferences.getBoolean(HealthConnectBackend.INITIALIZED_KEY, false)
                 ) {
