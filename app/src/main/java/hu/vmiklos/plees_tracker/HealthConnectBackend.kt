@@ -241,7 +241,7 @@ object HealthConnectBackend {
         deletePending(
             client,
             remoteByClientId,
-            clearMissingRecords = readablePeriodStart == Instant.EPOCH
+            readablePeriodStart
         )
 
         val sleeps = localSleeps(readablePeriodStart)
@@ -347,14 +347,12 @@ object HealthConnectBackend {
     internal suspend fun deletePending(
         client: HealthConnectClient,
         remoteByClientId: Map<String, SleepSessionRecord>,
-        clearMissingRecords: Boolean = true
+        readablePeriodStart: Instant = Instant.EPOCH
     ) {
         val healthDao = DataModel.database.healthConnectDao()
         val tombstoneIds = healthDao.getDeletions()
             .filter { deletion ->
-                clearMissingRecords || remoteByClientId.containsKey(
-                    CLIENT_ID_PREFIX + deletion.healthConnectId
-                )
+                deletion.start >= readablePeriodStart.toEpochMilli()
             }
             .map { it.healthConnectId }
         for (chunk in tombstoneIds.chunked(PAGE_SIZE)) {

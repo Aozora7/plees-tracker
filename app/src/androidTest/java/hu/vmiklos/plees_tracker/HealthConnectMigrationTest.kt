@@ -69,6 +69,7 @@ class HealthConnectMigrationTest {
 
             val deletion = HealthConnectDeletion().apply {
                 healthConnectId = sleeps[0].healthConnectId
+                start = sleeps[0].start
             }
             roomDatabase.healthConnectDao().insertDeletions(listOf(deletion))
             assertEquals(listOf(deletion), roomDatabase.healthConnectDao().getDeletions())

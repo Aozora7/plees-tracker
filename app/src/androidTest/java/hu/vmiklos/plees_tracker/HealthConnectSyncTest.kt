@@ -215,7 +215,7 @@ class HealthConnectSyncTest {
     }
 
     @Test
-    fun testLimitedReconciliationRetainsInvisibleDeletion() = runBlocking {
+    fun testLimitedReconciliationRetainsOnlyUnreadableDeletion() = runBlocking {
         val readablePeriodStart = Instant.now().minusSeconds(60)
         val historical = sleep(1).apply {
             start = readablePeriodStart.minusSeconds(60).toEpochMilli()
@@ -233,15 +233,16 @@ class HealthConnectSyncTest {
         )
         database.healthConnectDao().insertDeletions(
             listOf(
-                HealthConnectDeletion(historical.healthConnectId),
-                HealthConnectDeletion(current.healthConnectId)
+                HealthConnectDeletion(historical.healthConnectId, historical.start),
+                HealthConnectDeletion(current.healthConnectId, current.start),
+                HealthConnectDeletion(UUID.randomUUID().toString(), current.start)
             )
         )
 
         HealthConnectBackend.sync(client, packageName, readablePeriodStart)
 
         assertEquals(
-            listOf(HealthConnectDeletion(historical.healthConnectId)),
+            listOf(HealthConnectDeletion(historical.healthConnectId, historical.start)),
             database.healthConnectDao().getDeletions()
         )
     }
