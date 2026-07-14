@@ -11,6 +11,7 @@ import android.os.RemoteException
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.records.Record
 import androidx.health.connect.client.request.ReadRecordsRequest
+import androidx.health.connect.client.response.InsertRecordsResponse
 import androidx.health.connect.client.response.ReadRecordsResponse
 import androidx.health.connect.client.testing.FakeHealthConnectClient
 import androidx.health.connect.client.testing.FakePermissionController
@@ -20,9 +21,11 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.SdkSuppress
 import java.time.Clock
 import java.util.UUID
+import kotlin.reflect.KClass
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -95,6 +98,29 @@ class HealthConnectSyncTest {
     }
 
     @Test
+    fun testRateLimitedOperationsEventuallyComplete() = runBlocking {
+        val sleep = sleep(1)
+        database.sleepDao().insert(sleep)
+        val rateLimitedClient = AlternatingRateLimitClient(client)
+
+        assertTrue(syncUntilSuccess(rateLimitedClient) > 1)
+        assertEquals(1, HealthConnectBackend.readOwnRecords(client, packageName).size)
+
+        database.healthConnectDao().insertDeletions(
+            listOf(HealthConnectDeletion(sleep.healthConnectId))
+        )
+        database.sleepDao().delete(sleep)
+
+        assertTrue(
+            syncUntilSuccess(rateLimitedClient) {
+                assertEquals(1, database.healthConnectDao().getDeletions().size)
+            } > 1
+        )
+        assertEquals(0, HealthConnectBackend.readOwnRecords(client, packageName).size)
+        assertEquals(0, database.healthConnectDao().getDeletions().size)
+    }
+
+    @Test
     fun testUnmatchedHistoricalRecordSurvivesSyncAndUnrelatedDeletion() = runBlocking {
         val historical = sleep(1)
         client.insertRecords(listOf(HealthConnectBackend.toRecord(historical)))
@@ -152,6 +178,61 @@ class HealthConnectSyncTest {
         start = index * 3_000L
         stop = start + 1_000
         healthConnectId = UUID.nameUUIDFromBytes(index.toString().toByteArray()).toString()
+    }
+
+    private suspend fun syncUntilSuccess(
+        client: HealthConnectClient,
+        onRetry: suspend () -> Unit = {}
+    ): Int {
+        for (attempt in 1..MAX_SYNC_ATTEMPTS) {
+            try {
+                HealthConnectBackend.sync(client, packageName)
+                return attempt
+            } catch (_: RemoteException) {
+                // WorkManager repeats the same synchronization after a transient provider error.
+                onRetry()
+            }
+        }
+        throw AssertionError("Health Connect synchronization did not complete")
+    }
+
+    private class AlternatingRateLimitClient(
+        private val delegate: HealthConnectClient
+    ) : HealthConnectClient by delegate {
+        private var inserts = 0
+        private var reads = 0
+        private var deletions = 0
+
+        override suspend fun insertRecords(records: List<Record>): InsertRecordsResponse {
+            rateLimit(++inserts)
+            return delegate.insertRecords(records)
+        }
+
+        override suspend fun <T : Record> readRecords(
+            request: ReadRecordsRequest<T>
+        ): ReadRecordsResponse<T> {
+            rateLimit(++reads)
+            return delegate.readRecords(request)
+        }
+
+        override suspend fun deleteRecords(
+            recordType: KClass<out Record>,
+            recordIdsList: List<String>,
+            clientRecordIdsList: List<String>
+        ) {
+            rateLimit(++deletions)
+            delegate.deleteRecords(recordType, recordIdsList, clientRecordIdsList)
+        }
+
+        private fun rateLimit(operation: Int) {
+            if (operation % 2 == 1) {
+                throw RemoteException("rate limited")
+            }
+        }
+    }
+
+    companion object {
+        private const val MAX_SYNC_ATTEMPTS = 10
     }
 }
 
