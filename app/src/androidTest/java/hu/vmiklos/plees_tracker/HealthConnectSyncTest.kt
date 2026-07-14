@@ -15,11 +15,11 @@ import androidx.health.connect.client.response.InsertRecordsResponse
 import androidx.health.connect.client.response.ReadRecordsResponse
 import androidx.health.connect.client.testing.FakeHealthConnectClient
 import androidx.health.connect.client.testing.FakePermissionController
+import androidx.preference.PreferenceManager
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.SdkSuppress
-import androidx.preference.PreferenceManager
 import java.time.Clock
 import java.time.Instant
 import java.util.UUID
@@ -27,6 +27,7 @@ import kotlin.reflect.KClass
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -186,7 +187,10 @@ class HealthConnectSyncTest {
 
     @Test
     fun testReadCutoffIsPersistedAtPermissionGrant() {
-        val preferences = PreferenceManager.getDefaultSharedPreferences(context)
+        val preferences = context.getSharedPreferences(
+            HealthConnectBackend.LOCAL_PREFERENCES_NAME,
+            Context.MODE_PRIVATE
+        )
         val hadCutoff = preferences.contains(HealthConnectBackend.READ_CUTOFF_KEY)
         val previousCutoff = preferences.getLong(HealthConnectBackend.READ_CUTOFF_KEY, 0)
         preferences.edit().remove(HealthConnectBackend.READ_CUTOFF_KEY).commit()
@@ -211,6 +215,50 @@ class HealthConnectSyncTest {
                 editor.remove(HealthConnectBackend.READ_CUTOFF_KEY)
             }
             editor.commit()
+        }
+    }
+
+    @Test
+    fun testEnabledStateUsesBackupExcludedPreferences() {
+        val localPreferences = HealthConnectBackend.localPreferences(context)
+        val backedUpPreferences = PreferenceManager.getDefaultSharedPreferences(context)
+        val hadLocalValue = localPreferences.contains(HealthConnectBackend.ENABLED_KEY)
+        val previousLocalValue = localPreferences.getBoolean(
+            HealthConnectBackend.ENABLED_KEY,
+            false
+        )
+        val hadBackedUpValue = backedUpPreferences.contains(HealthConnectBackend.ENABLED_KEY)
+        val previousBackedUpValue = backedUpPreferences.getBoolean(
+            HealthConnectBackend.ENABLED_KEY,
+            false
+        )
+        try {
+            backedUpPreferences.edit()
+                .putBoolean(HealthConnectBackend.ENABLED_KEY, true)
+                .commit()
+            HealthConnectBackend.setEnabled(context, false)
+            assertFalse(HealthConnectBackend.isEnabled(context))
+
+            backedUpPreferences.edit()
+                .putBoolean(HealthConnectBackend.ENABLED_KEY, false)
+                .commit()
+            HealthConnectBackend.setEnabled(context, true)
+            assertTrue(HealthConnectBackend.isEnabled(context))
+        } finally {
+            localPreferences.edit().apply {
+                if (hadLocalValue) {
+                    putBoolean(HealthConnectBackend.ENABLED_KEY, previousLocalValue)
+                } else {
+                    remove(HealthConnectBackend.ENABLED_KEY)
+                }
+            }.commit()
+            backedUpPreferences.edit().apply {
+                if (hadBackedUpValue) {
+                    putBoolean(HealthConnectBackend.ENABLED_KEY, previousBackedUpValue)
+                } else {
+                    remove(HealthConnectBackend.ENABLED_KEY)
+                }
+            }.commit()
         }
     }
 
