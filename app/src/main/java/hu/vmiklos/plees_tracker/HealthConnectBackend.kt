@@ -39,10 +39,11 @@ object HealthConnectBackend {
     const val PERMISSION_REQUESTED_KEY = "health_connect_permission_requested"
 
     internal const val CLIENT_ID_PREFIX = "plees-sleep:"
+    internal const val READ_CUTOFF_KEY = "health_connect_read_cutoff"
     private const val PROVIDER_PACKAGE_NAME = "com.google.android.apps.healthdata"
     private const val WORK_NAME = "health_connect_sync"
     private const val PAGE_SIZE = 1000
-    private const val LEGACY_READ_DAYS = 30L
+    private const val LEGACY_READ_MILLIS = 30L * 24 * 60 * 60 * 1000
     private const val TAG = "HealthConnectBackend"
     private val operationMutex = Mutex()
 
@@ -119,14 +120,35 @@ object HealthConnectBackend {
     internal fun canReadAllHistory(sdkInt: Int = Build.VERSION.SDK_INT): Boolean =
         sdkInt >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE
 
+    internal fun recordPermissionGrant(
+        context: Context,
+        grantedAtMillis: Long = System.currentTimeMillis(),
+        sdkInt: Int = Build.VERSION.SDK_INT
+    ) {
+        if (canReadAllHistory(sdkInt)) {
+            return
+        }
+        val preferences = PreferenceManager.getDefaultSharedPreferences(context)
+        if (!preferences.contains(READ_CUTOFF_KEY)) {
+            preferences.edit()
+                .putLong(READ_CUTOFF_KEY, grantedAtMillis - LEGACY_READ_MILLIS)
+                .apply()
+        }
+    }
+
     @RequiresApi(Build.VERSION_CODES.P)
     internal fun readablePeriodStart(
-        now: Instant = Instant.now(),
+        context: Context,
+        nowMillis: Long = System.currentTimeMillis(),
         sdkInt: Int = Build.VERSION.SDK_INT
-    ): Instant = if (sdkInt >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-        Instant.EPOCH
-    } else {
-        now.minusSeconds(LEGACY_READ_DAYS * 24 * 60 * 60)
+    ): Instant {
+        if (canReadAllHistory(sdkInt)) {
+            return Instant.EPOCH
+        }
+        recordPermissionGrant(context, nowMillis, sdkInt)
+        val cutoff = PreferenceManager.getDefaultSharedPreferences(context)
+            .getLong(READ_CUTOFF_KEY, nowMillis - LEGACY_READ_MILLIS)
+        return Instant.ofEpochMilli(cutoff)
     }
 
     @RequiresApi(Build.VERSION_CODES.P)
@@ -174,7 +196,7 @@ object HealthConnectBackend {
         }
         val client = HealthConnectClient.getOrCreate(context)
         operationMutex.withLock {
-            sync(client, context.packageName, readablePeriodStart())
+            sync(client, context.packageName, readablePeriodStart(context))
         }
     }
 
@@ -356,7 +378,7 @@ object HealthConnectBackend {
         readOwnRecords(
             HealthConnectClient.getOrCreate(context),
             context.packageName,
-            readablePeriodStart()
+            readablePeriodStart(context)
         )
 
     @RequiresApi(Build.VERSION_CODES.P)

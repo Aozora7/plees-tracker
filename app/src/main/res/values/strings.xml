@@ -70,8 +70,8 @@
     <string name="health_connect_open_settings">Open Health Connect</string>
     <string name="health_connect_import_title">Previous sleeps found</string>
     <plurals name="health_connect_import_message">
-        <item quantity="one">Health Connect contains %d sleep previously written by Plees Tracker that is not in this installation. You can import it or keep it only in Health Connect. Due to limitations of Health Connect on Android 13 and older, only the last 30 days can be imported or reconciled.</item>
-        <item quantity="other">Health Connect contains %d sleeps previously written by Plees Tracker that are not in this installation. You can import them or keep them only in Health Connect. Due to limitations of Health Connect on Android 13 and older, only the last 30 days can be imported or reconciled.</item>
+        <item quantity="one">Health Connect contains %d sleep previously written by Plees Tracker that is not in this installation. You can import it or keep it only in Health Connect. On Android 13 and older, Health Connect access begins 30 days before permission was granted; older sleeps cannot be imported or reconciled.</item>
+        <item quantity="other">Health Connect contains %d sleeps previously written by Plees Tracker that are not in this installation. You can import them or keep them only in Health Connect. On Android 13 and older, Health Connect access begins 30 days before permission was granted; older sleeps cannot be imported or reconciled.</item>
     </plurals>
     <string name="health_connect_import">Import</string>
     <string name="health_connect_skip">Skip</string>

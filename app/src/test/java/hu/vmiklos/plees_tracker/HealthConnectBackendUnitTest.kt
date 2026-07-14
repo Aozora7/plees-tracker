@@ -21,14 +21,7 @@ import org.junit.Test
 /** Unit tests for mapping and origin filtering at the Health Connect boundary. */
 class HealthConnectBackendUnitTest {
     @Test
-    fun testLegacyReadWindowAndWipeAvailability() {
-        val now = Instant.parse("2026-07-14T12:00:00Z")
-
-        assertEquals(
-            Instant.parse("2026-06-14T12:00:00Z"),
-            HealthConnectBackend.readablePeriodStart(now, 33)
-        )
-        assertEquals(Instant.EPOCH, HealthConnectBackend.readablePeriodStart(now, 34))
+    fun testFullHistoryAvailability() {
         assertFalse(HealthConnectBackend.canReadAllHistory(33))
         assertTrue(HealthConnectBackend.canReadAllHistory(34))
     }

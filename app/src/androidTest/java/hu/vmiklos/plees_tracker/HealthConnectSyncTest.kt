@@ -19,6 +19,7 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.SdkSuppress
+import androidx.preference.PreferenceManager
 import java.time.Clock
 import java.time.Instant
 import java.util.UUID
@@ -181,6 +182,36 @@ class HealthConnectSyncTest {
             database.sleepDao().getPendingHealthConnectWrites().map { it.healthConnectId }
         )
         assertEquals(1, HealthConnectBackend.readOwnRecords(client, packageName).size)
+    }
+
+    @Test
+    fun testReadCutoffIsPersistedAtPermissionGrant() {
+        val preferences = PreferenceManager.getDefaultSharedPreferences(context)
+        val hadCutoff = preferences.contains(HealthConnectBackend.READ_CUTOFF_KEY)
+        val previousCutoff = preferences.getLong(HealthConnectBackend.READ_CUTOFF_KEY, 0)
+        preferences.edit().remove(HealthConnectBackend.READ_CUTOFF_KEY).commit()
+        try {
+            val grantedAt = Instant.parse("2026-07-14T12:00:00Z").toEpochMilli()
+            HealthConnectBackend.recordPermissionGrant(context, grantedAt, 33)
+            HealthConnectBackend.recordPermissionGrant(context, grantedAt + 86_400_000, 33)
+
+            assertEquals(
+                Instant.parse("2026-06-14T12:00:00Z"),
+                HealthConnectBackend.readablePeriodStart(
+                    context,
+                    grantedAt + 86_400_000,
+                    33
+                )
+            )
+        } finally {
+            val editor = preferences.edit()
+            if (hadCutoff) {
+                editor.putLong(HealthConnectBackend.READ_CUTOFF_KEY, previousCutoff)
+            } else {
+                editor.remove(HealthConnectBackend.READ_CUTOFF_KEY)
+            }
+            editor.commit()
+        }
     }
 
     @Test
