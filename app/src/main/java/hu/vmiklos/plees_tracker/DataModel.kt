@@ -406,7 +406,21 @@ object DataModel {
     }
 
     suspend fun importHealthConnectSleeps(sleeps: List<Sleep>) {
-        insertNewSleeps(sleeps)
+        insertNewSleeps(healthConnectImportCandidates(sleeps))
+    }
+
+    /**
+     * Returns provider sleeps which are not already represented locally. Matching Health Connect
+     * IDs belong to the local source of truth even if their contents differ; matching contents
+     * with a different ID are also skipped to avoid creating a visible duplicate.
+     */
+    suspend fun healthConnectImportCandidates(sleeps: List<Sleep>): List<Sleep> {
+        val localSleeps = database.sleepDao().getAll()
+        val localIds = localSleeps.mapTo(mutableSetOf()) { it.healthConnectId }
+        val localContents = localSleeps.toSet()
+        return sleeps.filter { sleep ->
+            sleep.healthConnectId !in localIds && sleep !in localContents
+        }
     }
 
     /**

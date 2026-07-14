@@ -7,6 +7,7 @@
 package hu.vmiklos.plees_tracker
 
 import android.app.TimePickerDialog
+import android.content.DialogInterface
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -22,6 +23,7 @@ import androidx.core.content.edit
 import androidx.health.connect.client.HealthConnectClient
 import androidx.lifecycle.lifecycleScope
 import androidx.preference.PreferenceManager
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 class PreferencesActivity : AppCompatActivity() {
@@ -34,6 +36,7 @@ class PreferencesActivity : AppCompatActivity() {
         private const val STATE_CHANGE_ACCOUNT_EMAIL = "changeAccountEmail"
         private const val STATE_CHANGE_ACCOUNT_FREQUENCY = "changeAccountFrequency"
         private const val STATE_HEALTH_SETTINGS_PENDING = "healthSettingsPending"
+        private const val HEALTH_CONNECT_WIPE_DELAY_SECONDS = 5
     }
 
     // Pending state of an in-flight folder-picker or Drive sign-in flow. The system activities
@@ -208,12 +211,14 @@ class PreferencesActivity : AppCompatActivity() {
                     HealthConnectBackend.INITIALIZED_KEY,
                     false
                 )
-                if (initialized || DataModel.hasSleeps()) {
+                if (initialized) {
                     finishHealthConnectEnable()
                     return@launch
                 }
                 val previous = try {
-                    HealthConnectBackend.previousSleeps(applicationContext)
+                    DataModel.healthConnectImportCandidates(
+                        HealthConnectBackend.previousSleeps(applicationContext)
+                    )
                 } catch (e: Exception) {
                     Log.e(TAG, "completeHealthConnectEnable: $e")
                     // Permission was granted, so keep the opt-in. Leaving INITIALIZED_KEY false
@@ -235,8 +240,9 @@ class PreferencesActivity : AppCompatActivity() {
         }
     }
 
+    @RequiresApi(Build.VERSION_CODES.P)
     private fun showHealthConnectImportDialog(sleeps: List<Sleep>) {
-        AlertDialog.Builder(this)
+        val dialog = AlertDialog.Builder(this)
             .setTitle(R.string.health_connect_import_title)
             .setMessage(
                 resources.getQuantityString(
@@ -254,8 +260,48 @@ class PreferencesActivity : AppCompatActivity() {
             .setNegativeButton(R.string.health_connect_skip) { _, _ ->
                 finishHealthConnectEnable()
             }
+            .setNeutralButton(R.string.health_connect_wipe, null)
             .setCancelable(false)
-            .show()
+            .create()
+        dialog.setOnShowListener {
+            val importButton = dialog.getButton(DialogInterface.BUTTON_POSITIVE)
+            val skipButton = dialog.getButton(DialogInterface.BUTTON_NEGATIVE)
+            val wipeButton = dialog.getButton(DialogInterface.BUTTON_NEUTRAL)
+            wipeButton.isEnabled = false
+            lifecycleScope.launch {
+                for (remaining in HEALTH_CONNECT_WIPE_DELAY_SECONDS downTo 1) {
+                    wipeButton.text = getString(
+                        R.string.health_connect_wipe_countdown,
+                        remaining
+                    )
+                    delay(1000)
+                    if (!dialog.isShowing) {
+                        return@launch
+                    }
+                }
+                wipeButton.text = getString(R.string.health_connect_wipe)
+                wipeButton.isEnabled = true
+            }
+            wipeButton.setOnClickListener {
+                importButton.isEnabled = false
+                skipButton.isEnabled = false
+                wipeButton.isEnabled = false
+                lifecycleScope.launch {
+                    try {
+                        HealthConnectBackend.wipe(applicationContext)
+                        dialog.dismiss()
+                        finishHealthConnectEnable()
+                    } catch (e: Exception) {
+                        Log.e(TAG, "wipeHealthConnect: $e")
+                        toast(R.string.health_connect_temporarily_unavailable)
+                        importButton.isEnabled = true
+                        skipButton.isEnabled = true
+                        wipeButton.isEnabled = true
+                    }
+                }
+            }
+        }
+        dialog.show()
     }
 
     private fun finishHealthConnectEnable() {
