@@ -20,6 +20,7 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.SdkSuppress
 import java.time.Clock
+import java.time.Instant
 import java.util.UUID
 import kotlin.reflect.KClass
 import kotlinx.coroutines.runBlocking
@@ -158,6 +159,60 @@ class HealthConnectSyncTest {
         HealthConnectBackend.sync(noInsertClient, packageName)
 
         assertEquals(0, database.sleepDao().getPendingHealthConnectWrites().size)
+    }
+
+    @Test
+    fun testReconciliationOnlyProcessesReadablePeriod() = runBlocking {
+        val readablePeriodStart = Instant.now().minusSeconds(60)
+        val historical = sleep(1).apply {
+            start = readablePeriodStart.minusSeconds(60).toEpochMilli()
+            stop = start + 1_000
+        }
+        val current = sleep(2).apply {
+            start = readablePeriodStart.plusSeconds(1).toEpochMilli()
+            stop = start + 1_000
+        }
+        database.sleepDao().insert(listOf(historical, current))
+
+        HealthConnectBackend.sync(client, packageName, readablePeriodStart)
+
+        assertEquals(
+            listOf(historical.healthConnectId),
+            database.sleepDao().getPendingHealthConnectWrites().map { it.healthConnectId }
+        )
+        assertEquals(1, HealthConnectBackend.readOwnRecords(client, packageName).size)
+    }
+
+    @Test
+    fun testLimitedReconciliationRetainsInvisibleDeletion() = runBlocking {
+        val readablePeriodStart = Instant.now().minusSeconds(60)
+        val historical = sleep(1).apply {
+            start = readablePeriodStart.minusSeconds(60).toEpochMilli()
+            stop = start + 1_000
+        }
+        val current = sleep(2).apply {
+            start = readablePeriodStart.plusSeconds(1).toEpochMilli()
+            stop = start + 1_000
+        }
+        client.insertRecords(
+            listOf(
+                HealthConnectBackend.toRecord(historical),
+                HealthConnectBackend.toRecord(current)
+            )
+        )
+        database.healthConnectDao().insertDeletions(
+            listOf(
+                HealthConnectDeletion(historical.healthConnectId),
+                HealthConnectDeletion(current.healthConnectId)
+            )
+        )
+
+        HealthConnectBackend.sync(client, packageName, readablePeriodStart)
+
+        assertEquals(
+            listOf(HealthConnectDeletion(historical.healthConnectId)),
+            database.healthConnectDao().getDeletions()
+        )
     }
 
     @Test

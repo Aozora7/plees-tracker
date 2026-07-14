@@ -42,6 +42,7 @@ object HealthConnectBackend {
     private const val PROVIDER_PACKAGE_NAME = "com.google.android.apps.healthdata"
     private const val WORK_NAME = "health_connect_sync"
     private const val PAGE_SIZE = 1000
+    private const val LEGACY_READ_DAYS = 30L
     private const val TAG = "HealthConnectBackend"
     private val operationMutex = Mutex()
 
@@ -115,6 +116,19 @@ object HealthConnectBackend {
     @RequiresApi(Build.VERSION_CODES.P)
     fun requestedPermissions(): Set<String> = setOf(writePermission())
 
+    internal fun canReadAllHistory(sdkInt: Int = Build.VERSION.SDK_INT): Boolean =
+        sdkInt >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE
+
+    @RequiresApi(Build.VERSION_CODES.P)
+    internal fun readablePeriodStart(
+        now: Instant = Instant.now(),
+        sdkInt: Int = Build.VERSION.SDK_INT
+    ): Instant = if (sdkInt >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+        Instant.EPOCH
+    } else {
+        now.minusSeconds(LEGACY_READ_DAYS * 24 * 60 * 60)
+    }
+
     @RequiresApi(Build.VERSION_CODES.P)
     suspend fun previousSleeps(context: Context): List<Sleep> {
         val records = readOwnRecords(context)
@@ -160,13 +174,16 @@ object HealthConnectBackend {
         }
         val client = HealthConnectClient.getOrCreate(context)
         operationMutex.withLock {
-            sync(client, context.packageName)
+            sync(client, context.packageName, readablePeriodStart())
         }
     }
 
     /** Deletes every sleep record whose Health Connect data origin is this app. */
     @RequiresApi(Build.VERSION_CODES.P)
     suspend fun wipe(context: Context) {
+        check(canReadAllHistory()) {
+            "Health Connect cannot expose all owned records before Android 14"
+        }
         val client = HealthConnectClient.getOrCreate(context)
         operationMutex.withLock {
             wipe(client, context.packageName)
@@ -187,12 +204,25 @@ object HealthConnectBackend {
 
     @RequiresApi(Build.VERSION_CODES.P)
     internal suspend fun sync(client: HealthConnectClient, packageName: String) {
-        val ownRecords = readOwnRecords(client, packageName)
+        sync(client, packageName, Instant.EPOCH)
+    }
+
+    @RequiresApi(Build.VERSION_CODES.P)
+    internal suspend fun sync(
+        client: HealthConnectClient,
+        packageName: String,
+        readablePeriodStart: Instant
+    ) {
+        val ownRecords = readOwnRecords(client, packageName, readablePeriodStart)
             .filter { it.metadata.clientRecordId?.startsWith(CLIENT_ID_PREFIX) == true }
         val remoteByClientId = ownRecords.associateBy { it.metadata.clientRecordId!! }
-        deletePending(client, remoteByClientId)
+        deletePending(
+            client,
+            remoteByClientId,
+            clearMissingRecords = readablePeriodStart == Instant.EPOCH
+        )
 
-        val sleeps = localSleeps()
+        val sleeps = localSleeps(readablePeriodStart)
         val healthDao = DataModel.database.healthConnectDao()
         val sleepsToWrite = mutableListOf<Sleep>()
         for (sleep in sleeps) {
@@ -268,8 +298,11 @@ object HealthConnectBackend {
         }
     }
 
-    private suspend fun localSleeps(): List<Sleep> =
-        validSleeps(DataModel.database.sleepDao().getAll())
+    @RequiresApi(Build.VERSION_CODES.P)
+    private suspend fun localSleeps(readablePeriodStart: Instant): List<Sleep> =
+        validSleeps(DataModel.database.sleepDao().getAll()).filter { sleep ->
+            sleep.start >= readablePeriodStart.toEpochMilli()
+        }
 
     private fun validSleeps(sleeps: List<Sleep>): List<Sleep> =
         sleeps.filter { sleep ->
@@ -291,10 +324,17 @@ object HealthConnectBackend {
     @RequiresApi(Build.VERSION_CODES.P)
     internal suspend fun deletePending(
         client: HealthConnectClient,
-        remoteByClientId: Map<String, SleepSessionRecord>
+        remoteByClientId: Map<String, SleepSessionRecord>,
+        clearMissingRecords: Boolean = true
     ) {
         val healthDao = DataModel.database.healthConnectDao()
-        val tombstoneIds = healthDao.getDeletions().map { it.healthConnectId }
+        val tombstoneIds = healthDao.getDeletions()
+            .filter { deletion ->
+                clearMissingRecords || remoteByClientId.containsKey(
+                    CLIENT_ID_PREFIX + deletion.healthConnectId
+                )
+            }
+            .map { it.healthConnectId }
         for (chunk in tombstoneIds.chunked(PAGE_SIZE)) {
             val clientIds = chunk.map { CLIENT_ID_PREFIX + it }
             val recordIds = clientIds.mapNotNull { remoteByClientId[it]?.metadata?.id }
@@ -313,19 +353,24 @@ object HealthConnectBackend {
 
     @RequiresApi(Build.VERSION_CODES.P)
     private suspend fun readOwnRecords(context: Context): List<SleepSessionRecord> =
-        readOwnRecords(HealthConnectClient.getOrCreate(context), context.packageName)
+        readOwnRecords(
+            HealthConnectClient.getOrCreate(context),
+            context.packageName,
+            readablePeriodStart()
+        )
 
     @RequiresApi(Build.VERSION_CODES.P)
     internal suspend fun readOwnRecords(
         client: HealthConnectClient,
-        packageName: String
+        packageName: String,
+        readablePeriodStart: Instant = Instant.EPOCH
     ): List<SleepSessionRecord> {
         val records = mutableListOf<SleepSessionRecord>()
         var pageToken: String? = null
         do {
             val response = client.readRecords(
                 ReadRecordsRequest<SleepSessionRecord>(
-                    timeRangeFilter = TimeRangeFilter.after(Instant.EPOCH),
+                    timeRangeFilter = TimeRangeFilter.after(readablePeriodStart),
                     dataOriginFilter = setOf(DataOrigin(packageName)),
                     pageSize = PAGE_SIZE,
                     pageToken = pageToken
