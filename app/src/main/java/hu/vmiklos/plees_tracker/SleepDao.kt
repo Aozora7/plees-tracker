@@ -21,6 +21,13 @@ interface SleepDao {
     @Query("SELECT * FROM sleep ORDER BY sid ASC")
     suspend fun getAll(): List<Sleep>
 
+    @Query(
+        "SELECT * FROM sleep " +
+            "WHERE health_connect_synced_version != health_connect_version " +
+            "ORDER BY sid ASC"
+    )
+    suspend fun getPendingHealthConnectWrites(): List<Sleep>
+
     @Query("SELECT * FROM sleep ORDER BY start_date DESC")
     fun getAllLive(): LiveData<List<Sleep>>
 

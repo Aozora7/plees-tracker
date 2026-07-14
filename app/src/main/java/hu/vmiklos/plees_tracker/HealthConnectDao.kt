@@ -31,9 +31,15 @@ interface HealthConnectDao {
 
     @Query(
         "UPDATE sleep SET health_connect_version = :version " +
-            "WHERE health_connect_id = :id"
+            "WHERE health_connect_id = :id AND health_connect_version = :expectedVersion"
     )
-    suspend fun updateVersion(id: String, version: Long)
+    suspend fun updateVersionIfCurrent(id: String, expectedVersion: Long, version: Long): Int
+
+    @Query(
+        "UPDATE sleep SET health_connect_synced_version = :version " +
+            "WHERE health_connect_id = :id AND health_connect_version = :version"
+    )
+    suspend fun markVersionSynced(id: String, version: Long)
 }
 
 private const val SQLITE_BIND_PARAMETER_LIMIT = 999

@@ -81,12 +81,13 @@ val MIGRATION_4_5 = object : Migration(4, 5) {
             "ALTER TABLE sleep ADD COLUMN health_connect_version INTEGER NOT NULL DEFAULT 0"
         )
         db.execSQL(
-            "CREATE UNIQUE INDEX index_Sleep_health_connect_id " +
-                "ON sleep(health_connect_id)"
+            "ALTER TABLE sleep ADD COLUMN health_connect_synced_version INTEGER NOT NULL DEFAULT -1"
         )
         db.execSQL(
-            "CREATE TABLE IF NOT EXISTS health_connect_deletion " +
-                "(health_connect_id TEXT NOT NULL, PRIMARY KEY(health_connect_id))"
+            "CREATE UNIQUE INDEX index_Sleep_health_connect_id ON sleep(health_connect_id)"
+        )
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS health_connect_deletion (health_connect_id TEXT NOT NULL, PRIMARY KEY(health_connect_id))"
         )
     }
 }

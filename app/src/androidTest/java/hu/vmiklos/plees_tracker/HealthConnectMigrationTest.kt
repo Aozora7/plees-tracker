@@ -65,6 +65,7 @@ class HealthConnectMigrationTest {
             UUID.fromString(sleeps[1].healthConnectId)
             assertNotEquals(sleeps[0].healthConnectId, sleeps[1].healthConnectId)
             assertEquals(0, sleeps[0].healthConnectVersion)
+            assertEquals(-1, sleeps[0].healthConnectSyncedVersion)
 
             val deletion = HealthConnectDeletion().apply {
                 healthConnectId = sleeps[0].healthConnectId

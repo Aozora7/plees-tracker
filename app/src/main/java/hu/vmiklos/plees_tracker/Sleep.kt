@@ -42,6 +42,9 @@ class Sleep {
     @ColumnInfo(name = "health_connect_version")
     var healthConnectVersion: Long = 0
 
+    @ColumnInfo(name = "health_connect_synced_version")
+    var healthConnectSyncedVersion: Long = -1
+
     private val lengthMs
         get() = stop - start
 
