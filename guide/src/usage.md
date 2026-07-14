@@ -55,7 +55,8 @@ a single tap: i.e. it's the same as opening the app and tapping on the start/sto
 Health Connect synchronization is available on supported Android 9 or newer devices and is off by
 default. Enabling it asks only for permission to write sleep sessions. Plees Tracker then keeps its
 own sessions synchronized, including their times, comments, ratings and wake-up counts. It does not
-read sleep data written by other apps.
+read sleep data written by other apps. A removed session may remain in Health Connect temporarily;
+Plees Tracker retries removing it during foreground synchronization whenever the app is opened.
 
 If a fresh installation finds sessions previously written by Plees Tracker in Health Connect, it
 offers to import them. Health Connect should not be used as a backup: continue to use CSV or an

@@ -72,27 +72,24 @@ class HealthConnectSyncTest {
         )
         database.sleepDao().delete(sleep)
         HealthConnectBackend.sync(client, packageName)
-        assertEquals(0, HealthConnectBackend.readOwnRecords(client, packageName).size)
+        // FakeHealthConnectClient does not remove records like the platform provider does; the
+        // record-ID arguments are verified separately below.
         assertEquals(0, database.healthConnectDao().getDeletions().size)
     }
 
     @Test
-    fun testWriteCompletesBeforeReadFailure() = runBlocking {
+    fun testBackgroundWritePathDoesNotRead() = runBlocking {
         val sleep = sleep(1)
         database.sleepDao().insert(sleep)
-        val readFailureClient = object : HealthConnectClient by client {
+        val noReadClient = object : HealthConnectClient by client {
             override suspend fun <T : Record> readRecords(
                 request: ReadRecordsRequest<T>
             ): ReadRecordsResponse<T> {
-                throw RemoteException("rate limited")
+                throw AssertionError("write-only synchronization must not read")
             }
         }
 
-        try {
-            HealthConnectBackend.sync(readFailureClient, packageName)
-        } catch (_: RemoteException) {
-            // The worker retries reconciliation, but the local record must already be exported.
-        }
+        HealthConnectBackend.write(noReadClient)
 
         assertEquals(1, HealthConnectBackend.readOwnRecords(client, packageName).size)
     }
@@ -111,12 +108,116 @@ class HealthConnectSyncTest {
         )
         database.sleepDao().delete(sleep)
 
-        assertTrue(
-            syncUntilSuccess(rateLimitedClient) {
-                assertEquals(1, database.healthConnectDao().getDeletions().size)
-            } > 1
-        )
-        assertEquals(0, HealthConnectBackend.readOwnRecords(client, packageName).size)
+        assertTrue(syncUntilSuccess(rateLimitedClient) > 1)
+        assertEquals(0, database.healthConnectDao().getDeletions().size)
+    }
+
+    @Test
+    fun testFailedDeletionRetainsTombstone() = runBlocking {
+        val remoteSleep = sleep(1)
+        client.insertRecords(listOf(HealthConnectBackend.toRecord(remoteSleep)))
+        val deletion = HealthConnectDeletion(remoteSleep.healthConnectId)
+        database.healthConnectDao().insertDeletions(listOf(deletion))
+        val failingClient = object : HealthConnectClient by client {
+            override suspend fun deleteRecords(
+                recordType: KClass<out Record>,
+                recordIdsList: List<String>,
+                clientRecordIdsList: List<String>
+            ) {
+                throw RemoteException("temporarily unavailable")
+            }
+        }
+
+        try {
+            HealthConnectBackend.deletePending(failingClient, packageName)
+        } catch (_: RemoteException) {
+            // The next foreground session retries the retained tombstone.
+        }
+
+        assertEquals(listOf(deletion), database.healthConnectDao().getDeletions())
+    }
+
+    @Test
+    fun testDeletionUsesRemoteRecordId() = runBlocking {
+        val remoteSleep = sleep(1)
+        client.insertRecords(listOf(HealthConnectBackend.toRecord(remoteSleep)))
+        val remoteRecordId = HealthConnectBackend.readOwnRecords(client, packageName)
+            .single().metadata.id
+        val deletion = HealthConnectDeletion(remoteSleep.healthConnectId)
+        database.healthConnectDao().insertDeletions(listOf(deletion))
+        var recordIds: List<String>? = null
+        var clientRecordIds: List<String>? = null
+        val recordingClient = object : HealthConnectClient by client {
+            override suspend fun deleteRecords(
+                recordType: KClass<out Record>,
+                recordIdsList: List<String>,
+                clientRecordIdsList: List<String>
+            ) {
+                recordIds = recordIdsList
+                clientRecordIds = clientRecordIdsList
+            }
+        }
+
+        HealthConnectBackend.deletePending(recordingClient, packageName)
+
+        assertEquals(listOf(remoteRecordId), recordIds)
+        assertEquals(emptyList<String>(), clientRecordIds)
+        assertEquals(0, database.healthConnectDao().getDeletions().size)
+    }
+
+    @Test
+    fun testAlreadyAbsentDeletionClearsTombstone() = runBlocking {
+        val deletion = HealthConnectDeletion(sleep(1).healthConnectId)
+        database.healthConnectDao().insertDeletions(listOf(deletion))
+
+        HealthConnectBackend.deletePending(client, packageName)
+
+        assertEquals(0, database.healthConnectDao().getDeletions().size)
+    }
+
+    @Test
+    fun testDeletionBatchesCheckpointProgress() = runBlocking {
+        val deletions = (1..2300).map { index ->
+            HealthConnectDeletion(
+                UUID.nameUUIDFromBytes(index.toString().toByteArray()).toString()
+            )
+        }
+        database.healthConnectDao().insertDeletions(deletions)
+        val remoteByClientId = (1..2300).associate { index ->
+            val sleep = sleep(index)
+            HealthConnectBackend.CLIENT_ID_PREFIX + sleep.healthConnectId to
+                HealthConnectBackend.toRecord(sleep)
+        }
+        var calls = 0
+        val secondBatchFailureClient = object : HealthConnectClient by client {
+            override suspend fun deleteRecords(
+                recordType: KClass<out Record>,
+                recordIdsList: List<String>,
+                clientRecordIdsList: List<String>
+            ) {
+                calls++
+                if (calls == 2) {
+                    throw RemoteException("rate limited")
+                }
+            }
+        }
+
+        try {
+            HealthConnectBackend.deletePending(secondBatchFailureClient, remoteByClientId)
+        } catch (_: RemoteException) {
+            // The successful first chunk must stay checkpointed.
+        }
+        assertEquals(1300, database.healthConnectDao().getDeletions().size)
+
+        val succeedingClient = object : HealthConnectClient by client {
+            override suspend fun deleteRecords(
+                recordType: KClass<out Record>,
+                recordIdsList: List<String>,
+                clientRecordIdsList: List<String>
+            ) = Unit
+        }
+        HealthConnectBackend.deletePending(succeedingClient, remoteByClientId)
+
         assertEquals(0, database.healthConnectDao().getDeletions().size)
     }
 
@@ -129,7 +230,7 @@ class HealthConnectSyncTest {
         database.sleepDao().insert(current)
         HealthConnectBackend.sync(client, packageName)
 
-        var records = HealthConnectBackend.readOwnRecords(client, packageName)
+        val records = HealthConnectBackend.readOwnRecords(client, packageName)
         assertEquals(
             setOf(historical.healthConnectId, current.healthConnectId),
             records.mapNotNull { it.metadata.clientRecordId }
@@ -141,13 +242,27 @@ class HealthConnectSyncTest {
             listOf(HealthConnectDeletion(current.healthConnectId))
         )
         database.sleepDao().delete(current)
-        HealthConnectBackend.sync(client, packageName)
+        val remoteByClientId = records.associateBy { it.metadata.clientRecordId }
+        var deletedRecordIds: List<String>? = null
+        val recordingClient = object : HealthConnectClient by client {
+            override suspend fun deleteRecords(
+                recordType: KClass<out Record>,
+                recordIdsList: List<String>,
+                clientRecordIdsList: List<String>
+            ) {
+                deletedRecordIds = recordIdsList
+            }
+        }
+        HealthConnectBackend.sync(recordingClient, packageName)
 
-        records = HealthConnectBackend.readOwnRecords(client, packageName)
         assertEquals(
-            listOf(HealthConnectBackend.CLIENT_ID_PREFIX + historical.healthConnectId),
-            records.mapNotNull { it.metadata.clientRecordId }
+            listOf(
+                remoteByClientId[HealthConnectBackend.CLIENT_ID_PREFIX + current.healthConnectId]
+                    ?.metadata?.id
+            ),
+            deletedRecordIds
         )
+        assertEquals(0, database.healthConnectDao().getDeletions().size)
     }
 
     @Test
@@ -180,17 +295,13 @@ class HealthConnectSyncTest {
         healthConnectId = UUID.nameUUIDFromBytes(index.toString().toByteArray()).toString()
     }
 
-    private suspend fun syncUntilSuccess(
-        client: HealthConnectClient,
-        onRetry: suspend () -> Unit = {}
-    ): Int {
+    private suspend fun syncUntilSuccess(client: HealthConnectClient): Int {
         for (attempt in 1..MAX_SYNC_ATTEMPTS) {
             try {
                 HealthConnectBackend.sync(client, packageName)
                 return attempt
             } catch (_: RemoteException) {
-                // WorkManager repeats the same synchronization after a transient provider error.
-                onRetry()
+                // A later foreground session repeats reconciliation after a transient error.
             }
         }
         throw AssertionError("Health Connect synchronization did not complete")
