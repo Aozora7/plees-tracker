@@ -164,6 +164,27 @@ object HealthConnectBackend {
         }
     }
 
+    /** Deletes every sleep record whose Health Connect data origin is this app. */
+    @RequiresApi(Build.VERSION_CODES.P)
+    suspend fun wipe(context: Context) {
+        val client = HealthConnectClient.getOrCreate(context)
+        operationMutex.withLock {
+            wipe(client, context.packageName)
+        }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.P)
+    internal suspend fun wipe(client: HealthConnectClient, packageName: String) {
+        val ownRecords = readOwnRecords(client, packageName)
+        for (chunk in ownRecords.chunked(PAGE_SIZE)) {
+            client.deleteRecords(
+                SleepSessionRecord::class,
+                recordIdsList = chunk.map { it.metadata.id },
+                clientRecordIdsList = emptyList()
+            )
+        }
+    }
+
     @RequiresApi(Build.VERSION_CODES.P)
     internal suspend fun sync(client: HealthConnectClient, packageName: String) {
         val ownRecords = readOwnRecords(client, packageName)

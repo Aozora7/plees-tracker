@@ -161,6 +161,48 @@ class HealthConnectSyncTest {
     }
 
     @Test
+    fun testImportOfferWithExistingLocalSleeps() = runBlocking {
+        val local = sleep(1)
+        database.sleepDao().insert(local)
+        val sameIdWithRemoteContents = sleep(2).apply {
+            healthConnectId = local.healthConnectId
+        }
+        val sameContentsWithDifferentId = sleep(1).apply {
+            healthConnectId = UUID.randomUUID().toString()
+        }
+        val remoteOnly = sleep(3)
+
+        val candidates = DataModel.healthConnectImportCandidates(
+            listOf(sameIdWithRemoteContents, sameContentsWithDifferentId, remoteOnly)
+        )
+
+        assertEquals(listOf(remoteOnly), candidates)
+    }
+
+    @Test
+    fun testWipeDeletesAllOwnedRecordsInBatches() = runBlocking {
+        val records = (1..1001).map { HealthConnectBackend.toRecord(sleep(it)) }
+        client.insertRecords(records)
+        val batchSizes = mutableListOf<Int>()
+        val clientRecordIdBatches = mutableListOf<List<String>>()
+        val recordingClient = object : HealthConnectClient by client {
+            override suspend fun deleteRecords(
+                recordType: KClass<out Record>,
+                recordIdsList: List<String>,
+                clientRecordIdsList: List<String>
+            ) {
+                batchSizes.add(recordIdsList.size)
+                clientRecordIdBatches.add(clientRecordIdsList)
+            }
+        }
+
+        HealthConnectBackend.wipe(recordingClient, packageName)
+
+        assertEquals(listOf(1000, 1), batchSizes)
+        assertTrue(clientRecordIdBatches.all { it.isEmpty() })
+    }
+
+    @Test
     fun testRateLimitedOperationsEventuallyComplete() = runBlocking {
         val sleep = sleep(1)
         database.sleepDao().insert(sleep)

@@ -58,10 +58,14 @@ own sessions synchronized, including their times, comments, ratings and wake-up 
 read sleep data written by other apps. A removed session may remain in Health Connect temporarily;
 Plees Tracker retries removing it during foreground synchronization whenever the app is opened.
 
-If a fresh installation finds sessions previously written by Plees Tracker in Health Connect, it
-offers to import them. Health Connect should not be used as a backup: continue to use CSV or an
-automatic backup for reliable recovery. Turning synchronization off leaves already-written Health
-Connect sessions in place.
+When synchronization is enabled, Plees Tracker offers to import any of its Health Connect sessions
+that are not already present locally. The same prompt can instead keep those sessions only in Health 
+Connect, or delete all Plees Tracker sleep data from Health Connect. Local sleeps are synchronized 
+back after that deletion. On Android 14 or newer, Health Connect can provide an additional recovery 
+source if its Scheduled export is configured to cloud storage and exports are completing 
+successfully. Health Connect should not be your only backup: continue to use CSV or an automatic 
+backup for reliable recovery. Turning synchronization off leaves already-written Health Connect 
+sessions in place.
 
 ### Theme
 
