@@ -15,6 +15,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.Menu
@@ -30,7 +31,10 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.content.edit
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.preference.PreferenceManager
 import androidx.recyclerview.widget.DefaultItemAnimator
 import androidx.recyclerview.widget.DividerItemDecoration
@@ -46,6 +50,7 @@ import hu.vmiklos.plees_tracker.calendar.UserCalendar
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Locale
+import kotlinx.coroutines.launch
 
 /**
  * The activity is the primary UI of the app: allows starting and stopping the
@@ -128,6 +133,21 @@ class MainActivity : AppCompatActivity(), View.OnClickListener {
         val preferences = PreferenceManager.getDefaultSharedPreferences(applicationContext)
         preferences.registerOnSharedPreferenceChangeListener(sharedPreferenceListener)
         DataModel.init(applicationContext, preferences)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            lifecycleScope.launch {
+                repeatOnLifecycle(Lifecycle.State.STARTED) {
+                    try {
+                        HealthConnectBackend.reconcileForeground(applicationContext)
+                    } catch (e: SecurityException) {
+                        Log.e(TAG, "Health Connect permission unavailable: $e")
+                    } catch (e: Exception) {
+                        // Keep tombstones for the next foreground session.
+                        Log.e(TAG, "Health Connect foreground reconciliation failed: $e")
+                    }
+                }
+            }
+        }
 
         viewModel = ViewModelProvider.AndroidViewModelFactory(application)
             .create(MainViewModel::class.java)
@@ -276,7 +296,6 @@ class MainActivity : AppCompatActivity(), View.OnClickListener {
 
     override fun onStart() {
         super.onStart()
-        DataModel.scheduleHealthConnectSync()
         val intent = Intent(this, MainService::class.java)
         stopService(intent)
         val recyclerView = findViewById<RecyclerView>(R.id.sleeps)

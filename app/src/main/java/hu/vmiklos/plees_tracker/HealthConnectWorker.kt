@@ -14,7 +14,7 @@ import androidx.preference.PreferenceManager
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 
-/** Reconciles Plees Tracker's local sleeps into Health Connect. */
+/** Writes Plees Tracker's local sleeps without reading Health Connect in the background. */
 class HealthConnectWorker(context: Context, params: WorkerParameters) :
     CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
@@ -26,7 +26,7 @@ class HealthConnectWorker(context: Context, params: WorkerParameters) :
         }
         DataModel.init(context, PreferenceManager.getDefaultSharedPreferences(context))
         return try {
-            HealthConnectBackend.sync(context)
+            HealthConnectBackend.write(context)
             Result.success()
         } catch (e: SecurityException) {
             Log.e(TAG, "doWork: Health Connect permission unavailable: $e")

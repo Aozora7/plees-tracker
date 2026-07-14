@@ -9,11 +9,11 @@ package hu.vmiklos.plees_tracker
 import android.content.Context
 import android.content.Intent
 import android.health.connect.HealthConnectManager
-import android.net.Uri
 import android.os.Build
 import android.util.Log
 import androidx.activity.result.contract.ActivityResultContract
 import androidx.annotation.RequiresApi
+import androidx.core.net.toUri
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.PermissionController
 import androidx.health.connect.client.permission.HealthPermission
@@ -29,7 +29,8 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import java.time.Instant
 import java.util.UUID
-import androidx.core.net.toUri
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /** Health Connect availability, permission, scheduling, and record synchronization. */
 object HealthConnectBackend {
@@ -42,6 +43,7 @@ object HealthConnectBackend {
     private const val WORK_NAME = "health_connect_sync"
     private const val PAGE_SIZE = 1000
     private const val TAG = "HealthConnectBackend"
+    private val operationMutex = Mutex()
 
     enum class Availability {
         UNAVAILABLE,
@@ -141,50 +143,38 @@ object HealthConnectBackend {
     }
 
     @RequiresApi(Build.VERSION_CODES.P)
-    suspend fun sync(context: Context) {
+    suspend fun write(context: Context) {
         if (!isEnabled(context)) {
             return
         }
         val client = HealthConnectClient.getOrCreate(context)
-        sync(client, context.packageName)
+        operationMutex.withLock {
+            write(client)
+        }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.P)
+    suspend fun reconcileForeground(context: Context) {
+        if (!isEnabled(context)) {
+            return
+        }
+        val client = HealthConnectClient.getOrCreate(context)
+        operationMutex.withLock {
+            sync(client, context.packageName)
+        }
     }
 
     @RequiresApi(Build.VERSION_CODES.P)
     internal suspend fun sync(client: HealthConnectClient, packageName: String) {
-        val healthDao = DataModel.database.healthConnectDao()
-        val sleeps = DataModel.database.sleepDao().getAll().filter { sleep ->
-            if (sleep.stop <= sleep.start) {
-                Log.w(TAG, "Skipping non-positive sleep ${sleep.healthConnectId}")
-                false
-            } else {
-                true
-            }
-        }
-        // Persist current local state before reconciliation. The APK provider has a much tighter
-        // read quota than its write quota; if the following read is temporarily rejected, stable
-        // client IDs and versions still make these upserts safe and the worker retries cleanup.
-        for (chunk in sleeps.map(::toRecord).chunked(PAGE_SIZE)) {
-            client.insertRecords(chunk)
-        }
-
         val ownRecords = readOwnRecords(client, packageName)
             .filter { it.metadata.clientRecordId?.startsWith(CLIENT_ID_PREFIX) == true }
-        val remoteByClientId = ownRecords.associateBy { it.metadata.clientRecordId }
+        val remoteByClientId = ownRecords.associateBy { it.metadata.clientRecordId!! }
+        deletePending(client, remoteByClientId)
 
-        val tombstoneIds = healthDao.getDeletions().map { it.healthConnectId }
-        for (chunk in tombstoneIds.chunked(PAGE_SIZE)) {
-            val clientIds = chunk.map { CLIENT_ID_PREFIX + it }
-            val recordIds = clientIds.mapNotNull { remoteByClientId[it]?.metadata?.id }
-            if (recordIds.isNotEmpty()) {
-                client.deleteRecords(
-                    SleepSessionRecord::class,
-                    recordIdsList = recordIds,
-                    clientRecordIdsList = emptyList()
-                )
-            }
-            healthDao.deleteDeletionsBatched(chunk)
-        }
+        val sleeps = localSleeps()
+        write(client, sleeps)
 
+        val healthDao = DataModel.database.healthConnectDao()
         val recordsToRewrite = mutableListOf<SleepSessionRecord>()
         for (sleep in sleeps) {
             val clientId = CLIENT_ID_PREFIX + sleep.healthConnectId
@@ -203,6 +193,58 @@ object HealthConnectBackend {
         }
         for (chunk in recordsToRewrite.chunked(PAGE_SIZE)) {
             client.insertRecords(chunk)
+        }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.P)
+    internal suspend fun write(client: HealthConnectClient) {
+        write(client, localSleeps())
+    }
+
+    @RequiresApi(Build.VERSION_CODES.P)
+    private suspend fun write(client: HealthConnectClient, sleeps: List<Sleep>) {
+        for (chunk in sleeps.map(::toRecord).chunked(PAGE_SIZE)) {
+            client.insertRecords(chunk)
+        }
+    }
+
+    private suspend fun localSleeps(): List<Sleep> =
+        DataModel.database.sleepDao().getAll().filter { sleep ->
+            if (sleep.stop <= sleep.start) {
+                Log.w(TAG, "Skipping non-positive sleep ${sleep.healthConnectId}")
+                false
+            } else {
+                true
+            }
+        }
+
+    @RequiresApi(Build.VERSION_CODES.P)
+    internal suspend fun deletePending(client: HealthConnectClient, packageName: String) {
+        val ownRecords = readOwnRecords(client, packageName)
+            .filter { it.metadata.clientRecordId?.startsWith(CLIENT_ID_PREFIX) == true }
+        deletePending(client, ownRecords.associateBy { it.metadata.clientRecordId!! })
+    }
+
+    @RequiresApi(Build.VERSION_CODES.P)
+    internal suspend fun deletePending(
+        client: HealthConnectClient,
+        remoteByClientId: Map<String, SleepSessionRecord>
+    ) {
+        val healthDao = DataModel.database.healthConnectDao()
+        val tombstoneIds = healthDao.getDeletions().map { it.healthConnectId }
+        for (chunk in tombstoneIds.chunked(PAGE_SIZE)) {
+            val clientIds = chunk.map { CLIENT_ID_PREFIX + it }
+            val recordIds = clientIds.mapNotNull { remoteByClientId[it]?.metadata?.id }
+            if (recordIds.isNotEmpty()) {
+                client.deleteRecords(
+                    SleepSessionRecord::class,
+                    recordIdsList = recordIds,
+                    clientRecordIdsList = emptyList()
+                )
+            }
+            // Checkpoint every completed chunk. Repeating a remote deletion is safe if the
+            // process is cancelled after the call above but before this local cleanup.
+            healthDao.deleteDeletionsBatched(chunk)
         }
     }
 
