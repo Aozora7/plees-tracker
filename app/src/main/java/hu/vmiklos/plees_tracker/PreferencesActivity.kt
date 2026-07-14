@@ -224,6 +224,7 @@ class PreferencesActivity : AppCompatActivity() {
 
     @RequiresApi(Build.VERSION_CODES.P)
     private fun completeHealthConnectEnable() {
+        HealthConnectBackend.recordPermissionGrant(applicationContext)
         val preferences = PreferenceManager.getDefaultSharedPreferences(applicationContext)
         if (preferences.getBoolean(HealthConnectBackend.INITIALIZED_KEY, false)) {
             finishHealthConnectEnable()
