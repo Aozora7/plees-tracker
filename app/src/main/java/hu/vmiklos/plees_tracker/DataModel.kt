@@ -87,7 +87,9 @@ val MIGRATION_4_5 = object : Migration(4, 5) {
             "CREATE UNIQUE INDEX index_Sleep_health_connect_id ON sleep(health_connect_id)"
         )
         db.execSQL(
-            "CREATE TABLE IF NOT EXISTS health_connect_deletion (health_connect_id TEXT NOT NULL, PRIMARY KEY(health_connect_id))"
+            "CREATE TABLE IF NOT EXISTS health_connect_deletion (" +
+                "health_connect_id TEXT NOT NULL, start_date INTEGER NOT NULL, " +
+                "PRIMARY KEY(health_connect_id))"
         )
     }
 }
@@ -285,6 +287,7 @@ object DataModel {
 
     private fun deletionFor(sleep: Sleep): HealthConnectDeletion = HealthConnectDeletion().apply {
         healthConnectId = sleep.healthConnectId
+        start = sleep.start
     }
 
     fun scheduleHealthConnectSync() {

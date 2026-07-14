@@ -15,7 +15,10 @@ import androidx.room.PrimaryKey
 data class HealthConnectDeletion(
     @PrimaryKey
     @ColumnInfo(name = "health_connect_id")
-    var healthConnectId: String = ""
+    var healthConnectId: String = "",
+
+    @ColumnInfo(name = "start_date")
+    var start: Long = 0
 )
 
 /* vim:set shiftwidth=4 softtabstop=4 expandtab: */
