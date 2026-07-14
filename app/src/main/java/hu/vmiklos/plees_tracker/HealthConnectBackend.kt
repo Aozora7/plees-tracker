@@ -172,44 +172,86 @@ object HealthConnectBackend {
         deletePending(client, remoteByClientId)
 
         val sleeps = localSleeps()
-        write(client, sleeps)
-
         val healthDao = DataModel.database.healthConnectDao()
-        val recordsToRewrite = mutableListOf<SleepSessionRecord>()
+        val sleepsToWrite = mutableListOf<Sleep>()
         for (sleep in sleeps) {
             val clientId = CLIENT_ID_PREFIX + sleep.healthConnectId
             val remote = remoteByClientId[clientId]
             if (remote != null && recordMatches(sleep, remote)) {
+                // Keep the local version at least as high as the provider's. Otherwise the next
+                // local edit could be ignored as an older upsert even though this content matches.
+                if (remote.metadata.clientRecordVersion > sleep.healthConnectVersion) {
+                    val oldVersion = sleep.healthConnectVersion
+                    val newVersion = remote.metadata.clientRecordVersion
+                    if (
+                        healthDao.updateVersionIfCurrent(
+                            sleep.healthConnectId,
+                            oldVersion,
+                            newVersion
+                        ) == 0
+                    ) {
+                        // A local edit won the race; leave its newer contents pending.
+                        continue
+                    }
+                    sleep.healthConnectVersion = newVersion
+                }
+                if (sleep.healthConnectSyncedVersion != sleep.healthConnectVersion) {
+                    healthDao.markVersionSynced(
+                        sleep.healthConnectId,
+                        sleep.healthConnectVersion
+                    )
+                }
                 continue
             }
             if (
                 remote != null &&
                 remote.metadata.clientRecordVersion >= sleep.healthConnectVersion
             ) {
-                sleep.healthConnectVersion = remote.metadata.clientRecordVersion + 1
-                healthDao.updateVersion(sleep.healthConnectId, sleep.healthConnectVersion)
-                recordsToRewrite.add(toRecord(sleep))
+                val oldVersion = sleep.healthConnectVersion
+                val newVersion = remote.metadata.clientRecordVersion + 1
+                if (
+                    healthDao.updateVersionIfCurrent(
+                        sleep.healthConnectId,
+                        oldVersion,
+                        newVersion
+                    ) == 0
+                ) {
+                    // Do not upload the stale snapshot if the user edited it during reconciliation.
+                    continue
+                }
+                sleep.healthConnectVersion = newVersion
             }
+            // The record is missing, older, or has different contents. Write only this sleep;
+            // stable client IDs and versions make retrying the unfinished subset safe.
+            sleepsToWrite.add(sleep)
         }
-        for (chunk in recordsToRewrite.chunked(PAGE_SIZE)) {
-            client.insertRecords(chunk)
-        }
+        write(client, sleepsToWrite)
     }
 
     @RequiresApi(Build.VERSION_CODES.P)
     internal suspend fun write(client: HealthConnectClient) {
-        write(client, localSleeps())
+        val pending = DataModel.database.sleepDao().getPendingHealthConnectWrites()
+        write(client, validSleeps(pending))
     }
 
     @RequiresApi(Build.VERSION_CODES.P)
     private suspend fun write(client: HealthConnectClient, sleeps: List<Sleep>) {
-        for (chunk in sleeps.map(::toRecord).chunked(PAGE_SIZE)) {
-            client.insertRecords(chunk)
+        val healthDao = DataModel.database.healthConnectDao()
+        for (chunk in sleeps.chunked(PAGE_SIZE)) {
+            client.insertRecords(chunk.map(::toRecord))
+            // Persist progress after every successful provider batch. The version predicate in
+            // markVersionSynced prevents a concurrent edit from being marked as uploaded.
+            for (sleep in chunk) {
+                healthDao.markVersionSynced(sleep.healthConnectId, sleep.healthConnectVersion)
+            }
         }
     }
 
     private suspend fun localSleeps(): List<Sleep> =
-        DataModel.database.sleepDao().getAll().filter { sleep ->
+        validSleeps(DataModel.database.sleepDao().getAll())
+
+    private fun validSleeps(sleeps: List<Sleep>): List<Sleep> =
+        sleeps.filter { sleep ->
             if (sleep.stop <= sleep.start) {
                 Log.w(TAG, "Skipping non-positive sleep ${sleep.healthConnectId}")
                 false

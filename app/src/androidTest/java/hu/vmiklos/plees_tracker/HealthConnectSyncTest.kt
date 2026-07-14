@@ -92,6 +92,72 @@ class HealthConnectSyncTest {
         HealthConnectBackend.write(noReadClient)
 
         assertEquals(1, HealthConnectBackend.readOwnRecords(client, packageName).size)
+        assertEquals(0, database.sleepDao().getPendingHealthConnectWrites().size)
+    }
+
+    @Test
+    fun testWriteBatchesCheckpointProgress() = runBlocking {
+        database.sleepDao().insert((1..1001).map(::sleep))
+        var calls = 0
+        val secondBatchFailureClient = object : HealthConnectClient by client {
+            override suspend fun insertRecords(records: List<Record>): InsertRecordsResponse {
+                calls++
+                if (calls == 2) {
+                    throw RemoteException("rate limited")
+                }
+                return client.insertRecords(records)
+            }
+        }
+
+        try {
+            HealthConnectBackend.write(secondBatchFailureClient)
+        } catch (_: RemoteException) {
+            // The successful first chunk must stay checkpointed.
+        }
+
+        assertEquals(1, database.sleepDao().getPendingHealthConnectWrites().size)
+
+        HealthConnectBackend.write(client)
+
+        assertEquals(0, database.sleepDao().getPendingHealthConnectWrites().size)
+    }
+
+    @Test
+    fun testConcurrentEditIsNotCheckpointedAsWritten() = runBlocking {
+        val sleep = sleep(1)
+        database.sleepDao().insert(sleep)
+        val editingClient = object : HealthConnectClient by client {
+            override suspend fun insertRecords(records: List<Record>): InsertRecordsResponse {
+                val response = client.insertRecords(records)
+                val edited = database.sleepDao().getAll().single()
+                edited.healthConnectVersion = 1
+                database.sleepDao().update(edited)
+                return response
+            }
+        }
+
+        HealthConnectBackend.write(editingClient)
+
+        val pending = database.sleepDao().getPendingHealthConnectWrites()
+        assertEquals(1, pending.size)
+        assertEquals(1, pending.single().healthConnectVersion)
+        assertEquals(-1, pending.single().healthConnectSyncedVersion)
+    }
+
+    @Test
+    fun testMatchingRemoteRecordClearsPendingWriteWithoutUpsert() = runBlocking {
+        val sleep = sleep(1)
+        database.sleepDao().insert(sleep)
+        client.insertRecords(listOf(HealthConnectBackend.toRecord(sleep)))
+        val noInsertClient = object : HealthConnectClient by client {
+            override suspend fun insertRecords(records: List<Record>): InsertRecordsResponse {
+                throw AssertionError("matching records must not be rewritten")
+            }
+        }
+
+        HealthConnectBackend.sync(noInsertClient, packageName)
+
+        assertEquals(0, database.sleepDao().getPendingHealthConnectWrites().size)
     }
 
     @Test
@@ -287,6 +353,7 @@ class HealthConnectSyncTest {
         HealthConnectBackend.sync(client, packageName)
 
         assertEquals(1001, HealthConnectBackend.readOwnRecords(client, packageName).size)
+        assertEquals(0, database.sleepDao().getPendingHealthConnectWrites().size)
     }
 
     private fun sleep(index: Int): Sleep = Sleep().apply {
