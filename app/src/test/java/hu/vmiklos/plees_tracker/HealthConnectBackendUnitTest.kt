@@ -13,11 +13,26 @@ import java.time.Clock
 import java.time.Instant
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /** Unit tests for mapping and origin filtering at the Health Connect boundary. */
 class HealthConnectBackendUnitTest {
+    @Test
+    fun testLegacyReadWindowAndWipeAvailability() {
+        val now = Instant.parse("2026-07-14T12:00:00Z")
+
+        assertEquals(
+            Instant.parse("2026-06-14T12:00:00Z"),
+            HealthConnectBackend.readablePeriodStart(now, 33)
+        )
+        assertEquals(Instant.EPOCH, HealthConnectBackend.readablePeriodStart(now, 34))
+        assertFalse(HealthConnectBackend.canReadAllHistory(33))
+        assertTrue(HealthConnectBackend.canReadAllHistory(34))
+    }
+
     @Test
     fun testSleepRecordRepresentation() {
         val sleep = Sleep().apply {
@@ -69,10 +84,49 @@ class HealthConnectBackendUnitTest {
         )
     }
 
-    private fun record(id: String): SleepSessionRecord = HealthConnectBackend.toRecord(
+    @Test
+    fun testReadOwnRecordsExcludesRecordsBeforeReadablePeriod() = runBlocking {
+        val now = Instant.parse("2026-07-14T12:00:00Z")
+        val readablePeriodStart = now.minusSeconds(30L * 24 * 60 * 60)
+        val client = FakeHealthConnectClient(
+            "hu.vmiklos.plees_tracker",
+            Clock.fixed(now, java.time.ZoneOffset.UTC),
+            FakePermissionController()
+        )
+        client.insertRecords(
+            listOf(
+                record(
+                    "00000000-0000-0000-0000-000000000001",
+                    readablePeriodStart.minusSeconds(1)
+                ),
+                record(
+                    "00000000-0000-0000-0000-000000000002",
+                    readablePeriodStart
+                )
+            )
+        )
+
+        val records = HealthConnectBackend.readOwnRecords(
+            client,
+            "hu.vmiklos.plees_tracker",
+            readablePeriodStart
+        )
+
+        assertEquals(1, records.size)
+        assertEquals(
+            HealthConnectBackend.CLIENT_ID_PREFIX +
+                "00000000-0000-0000-0000-000000000002",
+            records.single().metadata.clientRecordId
+        )
+    }
+
+    private fun record(
+        id: String,
+        start: Instant = Instant.ofEpochMilli(1_000)
+    ): SleepSessionRecord = HealthConnectBackend.toRecord(
         Sleep().apply {
-            start = 1_000
-            stop = 2_000
+            this.start = start.toEpochMilli()
+            stop = start.plusSeconds(1).toEpochMilli()
             healthConnectId = id
         }
     )

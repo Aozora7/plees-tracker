@@ -371,7 +371,7 @@ class PreferencesActivity : AppCompatActivity() {
             return
         }
         healthConnectImportDialogShowing = true
-        val dialog = AlertDialog.Builder(this)
+        val builder = AlertDialog.Builder(this)
             .setTitle(R.string.health_connect_import_title)
             .setMessage(
                 resources.getQuantityString(
@@ -389,13 +389,18 @@ class PreferencesActivity : AppCompatActivity() {
             .setNegativeButton(R.string.health_connect_skip) { _, _ ->
                 finishHealthConnectEnable()
             }
-            .setNeutralButton(R.string.health_connect_wipe, null)
             .setCancelable(false)
-            .create()
+        if (HealthConnectBackend.canReadAllHistory()) {
+            builder.setNeutralButton(R.string.health_connect_wipe, null)
+        }
+        val dialog = builder.create()
         dialog.setOnDismissListener {
             healthConnectImportDialogShowing = false
         }
         dialog.setOnShowListener {
+            if (!HealthConnectBackend.canReadAllHistory()) {
+                return@setOnShowListener
+            }
             val importButton = dialog.getButton(DialogInterface.BUTTON_POSITIVE)
             val skipButton = dialog.getButton(DialogInterface.BUTTON_NEGATIVE)
             val wipeButton = dialog.getButton(DialogInterface.BUTTON_NEUTRAL)
