@@ -12,6 +12,32 @@ import org.junit.Test
 /** Unit tests for Plees Tracker's human-readable Health Connect notes format. */
 class HealthConnectNotesUnitTest {
     @Test
+    fun testUnspecifiedMetadataOmitsFooter() {
+        val comment = "ordinary comment\n"
+        val withComment = sleep(comment = comment, rating = 0, wakes = 0)
+        val withoutComment = sleep(comment = "", rating = 0, wakes = 0)
+
+        assertEquals(comment, HealthConnectNotes.encode(withComment))
+        assertEquals(
+            HealthConnectNotes.Values(comment, 0, 0),
+            HealthConnectNotes.decode(HealthConnectNotes.encode(withComment))
+        )
+        assertEquals("", HealthConnectNotes.encode(withoutComment))
+    }
+
+    @Test
+    fun testOneSpecifiedMetadataValueWritesFooter() {
+        assertEquals(
+            "Plees Tracker metadata v1\nRating: 4\nWakes: 0",
+            HealthConnectNotes.encode(sleep(comment = "", rating = 4, wakes = 0))
+        )
+        assertEquals(
+            "Plees Tracker metadata v1\nRating: 0\nWakes: 2",
+            HealthConnectNotes.encode(sleep(comment = "", rating = 0, wakes = 2))
+        )
+    }
+
+    @Test
     fun testEmptyCommentRoundTrip() {
         val sleep = sleep(comment = "", rating = 4, wakes = 2)
 

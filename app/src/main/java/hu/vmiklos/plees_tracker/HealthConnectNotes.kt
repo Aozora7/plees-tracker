@@ -13,6 +13,9 @@ object HealthConnectNotes {
     data class Values(val comment: String, val rating: Long, val wakes: Int)
 
     fun encode(sleep: Sleep): String {
+        if (sleep.rating == 0L && sleep.wakes == 0) {
+            return sleep.comment
+        }
         val footer = "$HEADER\nRating: ${sleep.rating}\nWakes: ${sleep.wakes}"
         return if (sleep.comment.isEmpty()) footer else "${sleep.comment}\n\n$footer"
     }
