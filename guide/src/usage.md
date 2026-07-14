@@ -60,8 +60,8 @@ Plees Tracker retries removing it during foreground synchronization whenever the
 
 When synchronization is enabled, Plees Tracker offers to import any of its Health Connect sessions
 that are not already present locally. The same prompt can instead keep those sessions only in Health 
-Connect, or delete all Plees Tracker sleep data from Health Connect. Local sleeps are synchronized 
-back after that deletion. On Android 14 or newer, Health Connect can provide an additional recovery 
+Connect, or wipe previous Plees Tracker sleep data from Health Connect. Local sleeps are synchronized 
+back after the wipe. On Android 14 or newer, Health Connect can provide an additional recovery
 source if its Scheduled export is configured to cloud storage and exports are completing 
 successfully. Health Connect should not be your only backup: continue to use CSV or an automatic 
 backup for reliable recovery. Turning synchronization off leaves already-written Health Connect 

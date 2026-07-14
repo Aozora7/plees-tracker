@@ -6,17 +6,35 @@
 
 package hu.vmiklos.plees_tracker
 
+import android.content.Context
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
+import android.view.View
 import androidx.appcompat.app.AlertDialog
 import androidx.core.content.edit
 import androidx.lifecycle.lifecycleScope
 import androidx.preference.Preference
 import androidx.preference.PreferenceCategory
 import androidx.preference.PreferenceFragmentCompat
+import androidx.preference.PreferenceViewHolder
 import androidx.preference.SwitchPreference
 import kotlinx.coroutines.launch
+
+private class HealthConnectSwitchPreference(context: Context) : SwitchPreference(context) {
+    var checkPending = false
+        set(value) {
+            if (field != value) {
+                field = value
+                notifyChanged()
+            }
+        }
+
+    override fun onBindViewHolder(holder: PreferenceViewHolder) {
+        super.onBindViewHolder(holder)
+        holder.findViewById(android.R.id.switch_widget)?.isEnabled = isEnabled && !checkPending
+    }
+}
 
 class Preferences : PreferenceFragmentCompat() {
     companion object {
@@ -60,29 +78,82 @@ class Preferences : PreferenceFragmentCompat() {
     }
 
     private fun setupHealthConnectPreference() {
-        findPreference<SwitchPreference>(HealthConnectBackend.ENABLED_KEY)
-            ?.setOnPreferenceChangeListener { _, newValue ->
-                if (newValue != true) {
-                    HealthConnectBackend.cancelSync(requireContext())
-                    return@setOnPreferenceChangeListener true
+        val category = findPreference<PreferenceCategory>("health_connect_category") ?: return
+        val xmlPreference = findPreference<SwitchPreference>(HealthConnectBackend.ENABLED_KEY)
+            ?: return
+        val healthConnectPreference = HealthConnectSwitchPreference(requireContext()).apply {
+            key = HealthConnectBackend.ENABLED_KEY
+            order = xmlPreference.order
+            setDefaultValue(false)
+            setTitle(R.string.settings_health_connect)
+            setSummary(R.string.settings_health_connect_off)
+        }
+        category.removePreference(xmlPreference)
+        category.addPreference(healthConnectPreference)
+        healthConnectPreference.setOnPreferenceChangeListener { _, newValue ->
+            if ((activity as? PreferencesActivity)?.healthConnectCheckPending == true) {
+                return@setOnPreferenceChangeListener false
+            }
+            if (newValue != true) {
+                HealthConnectBackend.cancelSync(requireContext())
+                return@setOnPreferenceChangeListener true
+            }
+            when (HealthConnectBackend.availability(requireContext())) {
+                HealthConnectBackend.Availability.UNAVAILABLE -> false
+                HealthConnectBackend.Availability.UPDATE_REQUIRED -> {
+                    (activity as? PreferencesActivity)?.openHealthConnectProvider()
+                    false
                 }
-                when (HealthConnectBackend.availability(requireContext())) {
-                    HealthConnectBackend.Availability.UNAVAILABLE -> false
-                    HealthConnectBackend.Availability.UPDATE_REQUIRED -> {
-                        (activity as? PreferencesActivity)?.openHealthConnectProvider()
-                        false
-                    }
-                    HealthConnectBackend.Availability.AVAILABLE -> {
-                        (activity as? PreferencesActivity)?.requestHealthConnectPermission()
-                        false
-                    }
+                HealthConnectBackend.Availability.AVAILABLE -> {
+                    (activity as? PreferencesActivity)?.requestHealthConnectPermission()
+                    false
                 }
             }
+        }
+        object : Preference(requireContext()) {
+            override fun onBindViewHolder(holder: PreferenceViewHolder) {
+                super.onBindViewHolder(holder)
+                holder.itemView.findViewById<View>(R.id.health_connect_skip_check)
+                    .setOnClickListener {
+                        (activity as? PreferencesActivity)?.skipHealthConnectHistoryCheck()
+                    }
+                holder.itemView.findViewById<View>(R.id.health_connect_cancel_check)
+                    .setOnClickListener {
+                        (activity as? PreferencesActivity)?.cancelHealthConnectHistoryCheck()
+                    }
+            }
+        }.apply {
+            key = PreferencesActivity.HEALTH_CONNECT_CHECK_ACTIONS_KEY
+            order = 1
+            layoutResource = R.layout.preference_health_connect_check
+            isSelectable = false
+            isVisible = false
+            category.addPreference(this)
+        }
     }
 
     private fun refreshHealthConnectState() {
-        val preference = findPreference<SwitchPreference>(HealthConnectBackend.ENABLED_KEY)
+        val preference = findPreference<HealthConnectSwitchPreference>(
+            HealthConnectBackend.ENABLED_KEY
+        )
             ?: return
+        val checking = (activity as? PreferencesActivity)?.healthConnectCheckPending == true
+        findPreference<Preference>(PreferencesActivity.HEALTH_CONNECT_CHECK_ACTIONS_KEY)
+            ?.isVisible = checking
+        if (checking) {
+            // Reflect the attempted opt-in without persisting ENABLED_KEY until the check or an
+            // explicit skip completes.
+            preference.isPersistent = false
+            preference.isChecked = true
+            // Disabling the entire preference would also dim its status message. Disable only the
+            // switch widget, while the change listener keeps the row inert.
+            preference.isEnabled = true
+            preference.checkPending = true
+            preference.setSummary(R.string.settings_health_connect_checking)
+            return
+        }
+        preference.isPersistent = true
+        preference.checkPending = false
         when (HealthConnectBackend.availability(requireContext())) {
             HealthConnectBackend.Availability.UNAVAILABLE -> {
                 preference.isEnabled = false

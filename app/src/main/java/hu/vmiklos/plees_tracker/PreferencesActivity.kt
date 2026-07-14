@@ -21,10 +21,17 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.edit
 import androidx.health.connect.client.HealthConnectClient
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.preference.PreferenceManager
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
+import androidx.core.net.toUri
 
 class PreferencesActivity : AppCompatActivity() {
     companion object {
@@ -36,7 +43,14 @@ class PreferencesActivity : AppCompatActivity() {
         private const val STATE_CHANGE_ACCOUNT_EMAIL = "changeAccountEmail"
         private const val STATE_CHANGE_ACCOUNT_FREQUENCY = "changeAccountFrequency"
         private const val STATE_HEALTH_SETTINGS_PENDING = "healthSettingsPending"
+        private const val STATE_HEALTH_CHECK_PENDING = "healthCheckPending"
         private const val HEALTH_CONNECT_WIPE_DELAY_SECONDS = 5
+        private const val HEALTH_CONNECT_READ_TIMEOUT_MS = 30_000L
+        private const val HEALTH_CONNECT_RETRY_INITIAL_DELAY_MS = 1_000L
+        private const val HEALTH_CONNECT_RETRY_MAX_DELAY_MS = 30_000L
+
+        internal const val HEALTH_CONNECT_CHECK_ACTIONS_KEY = "health_connect_check_actions"
+        private const val HEALTH_CONNECT_CHECK_PENDING_KEY = "health_connect_check_pending"
     }
 
     // Pending state of an in-flight folder-picker or Drive sign-in flow. The system activities
@@ -65,8 +79,14 @@ class PreferencesActivity : AppCompatActivity() {
     // lets a permission granted there complete the opt-in when the user returns to Plees.
     private var healthSettingsPending = false
 
-    // Prevent duplicate history checks when activity resume and the permission callback race.
-    private var healthEnableInProgress = false
+    // The initial history inspection is foreground-only. Its pending state survives activity and
+    // process recreation; the actual read job runs only while this settings activity is started.
+    internal var healthConnectCheckPending = false
+        private set
+    private var healthConnectCheckJob: Job? = null
+    private var healthConnectCheckGeneration = 0
+    private var healthConnectImportDialogShowing = false
+    private var healthConnectRetryDelayMs = HEALTH_CONNECT_RETRY_INITIAL_DELAY_MS
 
     // The permission result is authoritative for this activity lifetime. Re-querying the
     // provider immediately after it returns needlessly consumes the APK provider's quota.
@@ -107,6 +127,13 @@ class PreferencesActivity : AppCompatActivity() {
             }
             healthSettingsPending = state.getBoolean(STATE_HEALTH_SETTINGS_PENDING)
         }
+        val persistedCheckPending = PreferenceManager
+            .getDefaultSharedPreferences(applicationContext)
+            .getBoolean(HEALTH_CONNECT_CHECK_PENDING_KEY, false)
+        healthConnectCheckPending = savedInstanceState?.getBoolean(
+            STATE_HEALTH_CHECK_PENDING,
+            persistedCheckPending
+        ) ?: persistedCheckPending
         supportFragmentManager
             .beginTransaction()
             .replace(R.id.root, Preferences())
@@ -189,10 +216,7 @@ class PreferencesActivity : AppCompatActivity() {
             startActivity(
                 Intent(
                     Intent.ACTION_VIEW,
-                    Uri.parse(
-                        "https://play.google.com/store/apps/details?id=" +
-                            "com.google.android.apps.healthdata"
-                    )
+                    ("https://play.google.com/store/apps/details?id=com.google.android.apps.healthdata").toUri()
                 )
             )
         }
@@ -200,48 +224,153 @@ class PreferencesActivity : AppCompatActivity() {
 
     @RequiresApi(Build.VERSION_CODES.P)
     private fun completeHealthConnectEnable() {
-        if (healthEnableInProgress) {
+        val preferences = PreferenceManager.getDefaultSharedPreferences(applicationContext)
+        if (preferences.getBoolean(HealthConnectBackend.INITIALIZED_KEY, false)) {
+            finishHealthConnectEnable()
             return
         }
-        healthEnableInProgress = true
-        lifecycleScope.launch {
+        healthSettingsPending = false
+        if (!healthConnectCheckPending) {
+            healthConnectRetryDelayMs = HEALTH_CONNECT_RETRY_INITIAL_DELAY_MS
+            setHealthConnectCheckPending(true)
+            refreshFragment()
+        }
+        startHealthConnectHistoryCheck()
+    }
+
+    private fun setHealthConnectCheckPending(pending: Boolean) {
+        healthConnectCheckPending = pending
+        PreferenceManager.getDefaultSharedPreferences(applicationContext).edit {
+            putBoolean(HEALTH_CONNECT_CHECK_PENDING_KEY, pending)
+        }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.P)
+    private fun startHealthConnectHistoryCheck() {
+        if (!healthConnectCheckPending || healthConnectImportDialogShowing) {
+            return
+        }
+        if (!lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+            return
+        }
+        if (healthConnectCheckJob?.isActive == true) {
+            return
+        }
+        val generation = ++healthConnectCheckGeneration
+        healthConnectCheckJob = lifecycleScope.launch {
             try {
-                val preferences = PreferenceManager.getDefaultSharedPreferences(applicationContext)
-                val initialized = preferences.getBoolean(
-                    HealthConnectBackend.INITIALIZED_KEY,
-                    false
-                )
-                if (initialized) {
-                    finishHealthConnectEnable()
-                    return@launch
-                }
-                val previous = try {
-                    DataModel.healthConnectImportCandidates(
-                        HealthConnectBackend.previousSleeps(applicationContext)
-                    )
-                } catch (e: Exception) {
-                    Log.e(TAG, "completeHealthConnectEnable: $e")
-                    // Permission was granted, so keep the opt-in. Leaving INITIALIZED_KEY false
-                    // makes a later settings resume retry the one-time history inspection.
-                    preferences.edit {
-                        putBoolean(HealthConnectBackend.ENABLED_KEY, true)
+                while (isActive &&
+                    healthConnectCheckPending &&
+                    generation == healthConnectCheckGeneration
+                ) {
+                    val previous = try {
+                        withTimeout(HEALTH_CONNECT_READ_TIMEOUT_MS) {
+                            DataModel.healthConnectImportCandidates(
+                                HealthConnectBackend.previousSleeps(applicationContext)
+                            )
+                        }
+                    } catch (e: SecurityException) {
+                        Log.e(TAG, "Health Connect permission lost during history check: $e")
+                        healthConnectPermissionKnownGranted = false
+                        stopHealthConnectHistoryCheck(cancelJob = false)
+                        PreferenceManager.getDefaultSharedPreferences(applicationContext).edit {
+                            putBoolean(HealthConnectBackend.ENABLED_KEY, false)
+                            putBoolean(HealthConnectBackend.INITIALIZED_KEY, false)
+                        }
+                        refreshFragment()
+                        showHealthConnectPermissionDeniedDialog()
+                        return@launch
+                    } catch (e: TimeoutCancellationException) {
+                        Log.e(
+                            TAG,
+                            "Health Connect history check timed out after " +
+                                "$HEALTH_CONNECT_READ_TIMEOUT_MS ms; retrying"
+                        )
+                        delay(healthConnectRetryDelayMs)
+                        healthConnectRetryDelayMs = (healthConnectRetryDelayMs * 2).coerceAtMost(
+                            HEALTH_CONNECT_RETRY_MAX_DELAY_MS
+                        )
+                        continue
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        // Quota and provider failures are transient. Keep the pending state visible
+                        // and retry only while this activity remains in the foreground.
+                        Log.e(TAG, "Health Connect history check failed; retrying: $e")
+                        delay(healthConnectRetryDelayMs)
+                        healthConnectRetryDelayMs = (healthConnectRetryDelayMs * 2).coerceAtMost(
+                            HEALTH_CONNECT_RETRY_MAX_DELAY_MS
+                        )
+                        continue
                     }
-                    refreshFragment()
+                    if (!healthConnectCheckPending ||
+                        generation != healthConnectCheckGeneration
+                    ) {
+                        return@launch
+                    }
+                    if (previous.isNotEmpty()) {
+                        showHealthConnectImportDialog(previous)
+                    } else {
+                        finishHealthConnectEnable()
+                    }
                     return@launch
-                }
-                if (previous.isNotEmpty()) {
-                    showHealthConnectImportDialog(previous)
-                } else {
-                    finishHealthConnectEnable()
                 }
             } finally {
-                healthEnableInProgress = false
+                if (generation == healthConnectCheckGeneration) {
+                    healthConnectCheckJob = null
+                }
             }
+        }
+    }
+
+    private fun pauseHealthConnectHistoryCheck() {
+        healthConnectCheckGeneration++
+        healthConnectCheckJob?.cancel()
+        healthConnectCheckJob = null
+    }
+
+    private fun stopHealthConnectHistoryCheck(cancelJob: Boolean = true) {
+        setHealthConnectCheckPending(false)
+        healthConnectCheckGeneration++
+        if (cancelJob) {
+            healthConnectCheckJob?.cancel()
+        }
+        healthConnectCheckJob = null
+        healthConnectRetryDelayMs = HEALTH_CONNECT_RETRY_INITIAL_DELAY_MS
+    }
+
+    fun skipHealthConnectHistoryCheck() {
+        if (healthConnectCheckPending) {
+            finishHealthConnectEnable()
+        }
+    }
+
+    fun cancelHealthConnectHistoryCheck() {
+        cancelHealthConnectHistoryCheck(refresh = true)
+    }
+
+    private fun cancelHealthConnectHistoryCheck(refresh: Boolean) {
+        if (!healthConnectCheckPending) {
+            return
+        }
+        stopHealthConnectHistoryCheck()
+        healthSettingsPending = false
+        PreferenceManager.getDefaultSharedPreferences(applicationContext).edit {
+            putBoolean(HealthConnectBackend.ENABLED_KEY, false)
+            putBoolean(HealthConnectBackend.INITIALIZED_KEY, false)
+        }
+        HealthConnectBackend.cancelSync(applicationContext)
+        if (refresh) {
+            refreshFragment()
         }
     }
 
     @RequiresApi(Build.VERSION_CODES.P)
     private fun showHealthConnectImportDialog(sleeps: List<Sleep>) {
+        if (!healthConnectCheckPending || healthConnectImportDialogShowing) {
+            return
+        }
+        healthConnectImportDialogShowing = true
         val dialog = AlertDialog.Builder(this)
             .setTitle(R.string.health_connect_import_title)
             .setMessage(
@@ -263,6 +392,9 @@ class PreferencesActivity : AppCompatActivity() {
             .setNeutralButton(R.string.health_connect_wipe, null)
             .setCancelable(false)
             .create()
+        dialog.setOnDismissListener {
+            healthConnectImportDialogShowing = false
+        }
         dialog.setOnShowListener {
             val importButton = dialog.getButton(DialogInterface.BUTTON_POSITIVE)
             val skipButton = dialog.getButton(DialogInterface.BUTTON_NEGATIVE)
@@ -305,6 +437,7 @@ class PreferencesActivity : AppCompatActivity() {
     }
 
     private fun finishHealthConnectEnable() {
+        stopHealthConnectHistoryCheck()
         healthSettingsPending = false
         val preferences = PreferenceManager.getDefaultSharedPreferences(applicationContext)
         preferences.edit {
@@ -330,6 +463,26 @@ class PreferencesActivity : AppCompatActivity() {
         outState.putString(STATE_CHANGE_ACCOUNT_EMAIL, changeAccountFrom?.email)
         outState.putString(STATE_CHANGE_ACCOUNT_FREQUENCY, changeAccountFrom?.frequency)
         outState.putBoolean(STATE_HEALTH_SETTINGS_PENDING, healthSettingsPending)
+        outState.putBoolean(STATE_HEALTH_CHECK_PENDING, healthConnectCheckPending)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && healthConnectCheckPending) {
+            startHealthConnectHistoryCheck()
+        }
+    }
+
+    override fun onStop() {
+        if (healthConnectCheckPending) {
+            if (isFinishing) {
+                // Leaving settings is an implicit cancel; backgrounding merely pauses the read.
+                cancelHealthConnectHistoryCheck(refresh = false)
+            } else {
+                pauseHealthConnectHistoryCheck()
+            }
+        }
+        super.onStop()
     }
 
     override fun onResume() {
