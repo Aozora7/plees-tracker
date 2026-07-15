@@ -396,6 +396,7 @@ object HealthConnectBackend {
         readablePeriodStart: Instant = Instant.EPOCH
     ): List<SleepSessionRecord> {
         val records = mutableListOf<SleepSessionRecord>()
+        val seenPageTokens = mutableSetOf<String>()
         var pageToken: String? = null
         do {
             val response = client.readRecords(
@@ -407,7 +408,9 @@ object HealthConnectBackend {
                 )
             )
             records.addAll(response.records)
-            pageToken = response.pageToken
+            pageToken = response.pageToken?.takeIf {
+                it.isNotBlank() && seenPageTokens.add(it)
+            }
         } while (pageToken != null)
         return records
     }

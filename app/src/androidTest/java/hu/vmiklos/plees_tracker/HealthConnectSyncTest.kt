@@ -533,6 +533,40 @@ class HealthConnectSyncTest {
         assertEquals(0, database.sleepDao().getPendingHealthConnectWrites().size)
     }
 
+    @Test
+    fun testReadStopsOnBlankPageToken() = runBlocking {
+        val requestedPageTokens = mutableListOf<String?>()
+        val blankTerminalTokenClient = object : HealthConnectClient by client {
+            override suspend fun <T : Record> readRecords(
+                request: ReadRecordsRequest<T>
+            ): ReadRecordsResponse<T> {
+                requestedPageTokens.add(request.pageToken)
+                return ReadRecordsResponse(emptyList(), "")
+            }
+        }
+
+        HealthConnectBackend.readOwnRecords(blankTerminalTokenClient, packageName)
+
+        assertEquals(listOf<String?>(null), requestedPageTokens)
+    }
+
+    @Test
+    fun testReadStopsOnRepeatedPageToken() = runBlocking {
+        val requestedPageTokens = mutableListOf<String?>()
+        val repeatedTokenClient = object : HealthConnectClient by client {
+            override suspend fun <T : Record> readRecords(
+                request: ReadRecordsRequest<T>
+            ): ReadRecordsResponse<T> {
+                requestedPageTokens.add(request.pageToken)
+                return ReadRecordsResponse(emptyList(), "repeated")
+            }
+        }
+
+        HealthConnectBackend.readOwnRecords(repeatedTokenClient, packageName)
+
+        assertEquals(listOf(null, "repeated"), requestedPageTokens)
+    }
+
     private fun sleep(index: Int): Sleep = Sleep().apply {
         start = index * 3_000L
         stop = start + 1_000
