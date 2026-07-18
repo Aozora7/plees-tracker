@@ -60,14 +60,14 @@ Plees Tracker retries removing it during foreground synchronization whenever the
 
 When synchronization is enabled, Plees Tracker offers to import any of its Health Connect sessions
 that are not already present locally. The same prompt can instead keep those sessions only in Health
-Connect. On Android 14 or newer, the prompt can also wipe previous Plees Tracker sleep data from
-Health Connect; local sleeps are synchronized back after the wipe. On Android 9 through 13,
-readable history begins 30 days before permission was granted, so older sessions are not reconciled
-and a reliable wipe is not available. On Android 14 or newer, Health Connect can provide an
-additional recovery source if its Scheduled export is configured to cloud storage and exports are
-completing successfully. Health Connect should not be your only backup: continue to use CSV or an
-automatic backup for reliable recovery. Turning synchronization off leaves already-written Health
-Connect sessions in place.
+Connect. When the installed Health Connect system module can expose Plees Tracker's complete record
+history, the prompt can also wipe previous Plees Tracker sleep data from Health Connect; local sleeps
+are synchronized back after the wipe. Otherwise, readable history begins 30 days before permission
+was granted, so older sessions are not reconciled and a reliable wipe is not available. On Android 14
+or newer, Health Connect can provide an additional recovery source if its Scheduled export is
+configured to cloud storage and exports are completing successfully. Health Connect should not be
+your only backup: continue to use CSV or an automatic backup for reliable recovery. Turning
+synchronization off leaves already-written Health Connect sessions in place.
 
 ### Theme
 

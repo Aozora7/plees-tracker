@@ -6,6 +6,7 @@
 
 package hu.vmiklos.plees_tracker
 
+import androidx.health.connect.client.HealthConnectFeatures
 import androidx.health.connect.client.records.SleepSessionRecord
 import androidx.health.connect.client.testing.FakeHealthConnectClient
 import androidx.health.connect.client.testing.FakePermissionController
@@ -22,8 +23,24 @@ import org.junit.Test
 class HealthConnectBackendUnitTest {
     @Test
     fun testFullHistoryAvailability() {
-        assertFalse(HealthConnectBackend.canReadAllHistory(33))
-        assertTrue(HealthConnectBackend.canReadAllHistory(34))
+        assertFalse(
+            HealthConnectBackend.canReadAllHistory(
+                33,
+                HealthConnectFeatures.FEATURE_STATUS_AVAILABLE
+            )
+        )
+        assertFalse(
+            HealthConnectBackend.canReadAllHistory(
+                34,
+                HealthConnectFeatures.FEATURE_STATUS_UNAVAILABLE
+            )
+        )
+        assertTrue(
+            HealthConnectBackend.canReadAllHistory(
+                34,
+                HealthConnectFeatures.FEATURE_STATUS_AVAILABLE
+            )
+        )
     }
 
     @Test

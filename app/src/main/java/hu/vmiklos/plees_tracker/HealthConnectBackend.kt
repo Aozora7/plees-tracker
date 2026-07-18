@@ -16,6 +16,7 @@ import androidx.activity.result.contract.ActivityResultContract
 import androidx.annotation.RequiresApi
 import androidx.core.net.toUri
 import androidx.health.connect.client.HealthConnectClient
+import androidx.health.connect.client.HealthConnectFeatures
 import androidx.health.connect.client.PermissionController
 import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.SleepSessionRecord
@@ -127,15 +128,47 @@ object HealthConnectBackend {
     @RequiresApi(Build.VERSION_CODES.P)
     fun requestedPermissions(): Set<String> = setOf(writePermission())
 
-    internal fun canReadAllHistory(sdkInt: Int = Build.VERSION.SDK_INT): Boolean =
-        sdkInt >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE
+    /**
+     * Whether range queries can expose the complete history of records owned by this app.
+     *
+     * Android 14's original Health Connect module still applied the permission-grant cutoff to
+     * owned records. The current Android 14+ contract removes that cutoff, but AndroidX reports
+     * the required module support only when FEATURE_READ_HEALTH_DATA_HISTORY is available (SDK
+     * extension 13+ on Android 14). On Android 13 and older, feature availability means the
+     * separate history permission can be requested; WRITE_SLEEP alone remains cutoff-limited.
+     */
+    internal fun canReadAllHistory(
+        sdkInt: Int,
+        historyFeatureStatus: Int
+    ): Boolean =
+        sdkInt >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
+            historyFeatureStatus == HealthConnectFeatures.FEATURE_STATUS_AVAILABLE
+
+    internal fun canReadAllHistory(
+        context: Context,
+        sdkInt: Int = Build.VERSION.SDK_INT
+    ): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P ||
+            sdkInt < Build.VERSION_CODES.UPSIDE_DOWN_CAKE ||
+            sdkStatus(context) != HealthConnectClient.SDK_AVAILABLE
+        ) {
+            return false
+        }
+        val client = HealthConnectClient.getOrCreate(context)
+        return canReadAllHistory(
+            sdkInt,
+            client.features.getFeatureStatus(
+                HealthConnectFeatures.FEATURE_READ_HEALTH_DATA_HISTORY
+            )
+        )
+    }
 
     internal fun recordPermissionGrant(
         context: Context,
         grantedAtMillis: Long = System.currentTimeMillis(),
         sdkInt: Int = Build.VERSION.SDK_INT
     ) {
-        if (canReadAllHistory(sdkInt)) {
+        if (canReadAllHistory(context, sdkInt)) {
             return
         }
         val preferences = localPreferences(context)
@@ -152,7 +185,7 @@ object HealthConnectBackend {
         nowMillis: Long = System.currentTimeMillis(),
         sdkInt: Int = Build.VERSION.SDK_INT
     ): Instant {
-        if (canReadAllHistory(sdkInt)) {
+        if (canReadAllHistory(context, sdkInt)) {
             return Instant.EPOCH
         }
         recordPermissionGrant(context, nowMillis, sdkInt)
@@ -213,8 +246,8 @@ object HealthConnectBackend {
     /** Deletes every sleep record whose Health Connect data origin is this app. */
     @RequiresApi(Build.VERSION_CODES.P)
     suspend fun wipe(context: Context) {
-        check(canReadAllHistory()) {
-            "Health Connect cannot expose all owned records before Android 14"
+        check(canReadAllHistory(context)) {
+            "Health Connect cannot expose all owned records on this system module"
         }
         val client = HealthConnectClient.getOrCreate(context)
         operationMutex.withLock {
