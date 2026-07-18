@@ -386,7 +386,7 @@ class PreferencesActivity : AppCompatActivity() {
                 finishHealthConnectEnable()
             }
             .setCancelable(false)
-        if (HealthConnectBackend.canReadAllHistory()) {
+        if (HealthConnectBackend.canReadAllHistory(applicationContext)) {
             builder.setNeutralButton(R.string.health_connect_wipe, null)
         }
         val dialog = builder.create()
@@ -394,7 +394,7 @@ class PreferencesActivity : AppCompatActivity() {
             healthConnectImportDialogShowing = false
         }
         dialog.setOnShowListener {
-            if (!HealthConnectBackend.canReadAllHistory()) {
+            if (!HealthConnectBackend.canReadAllHistory(applicationContext)) {
                 return@setOnShowListener
             }
             val importButton = dialog.getButton(DialogInterface.BUTTON_POSITIVE)
