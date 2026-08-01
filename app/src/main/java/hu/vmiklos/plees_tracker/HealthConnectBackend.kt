@@ -42,8 +42,8 @@ object HealthConnectBackend {
     internal const val CLIENT_ID_PREFIX = "plees-sleep:"
     internal const val LOCAL_PREFERENCES_NAME = "health_connect_local"
     internal const val READ_CUTOFF_KEY = "health_connect_read_cutoff"
+    internal const val HEALTH_CONNECT_BATCH_SIZE = 1000
     private const val WORK_NAME = "health_connect_sync"
-    private const val PAGE_SIZE = 1000
     private const val LEGACY_READ_MILLIS = 30L * 24 * 60 * 60 * 1000
     private const val TAG = "HealthConnectBackend"
     private val operationMutex = Mutex()
@@ -251,7 +251,7 @@ object HealthConnectBackend {
     @RequiresApi(Build.VERSION_CODES.P)
     internal suspend fun wipe(client: HealthConnectClient, packageName: String) {
         val ownRecords = readOwnRecords(client, packageName)
-        for (chunk in ownRecords.chunked(PAGE_SIZE)) {
+        for (chunk in ownRecords.chunked(HEALTH_CONNECT_BATCH_SIZE)) {
             client.deleteRecords(
                 SleepSessionRecord::class,
                 recordIdsList = chunk.map { it.metadata.id },
@@ -350,7 +350,7 @@ object HealthConnectBackend {
             sleep.healthConnectId = UUID.randomUUID().toString()
             healthDao.assignId(sleep.sid, sleep.healthConnectId)
         }
-        for (chunk in sleeps.chunked(PAGE_SIZE)) {
+        for (chunk in sleeps.chunked(HEALTH_CONNECT_BATCH_SIZE)) {
             client.insertRecords(chunk.map(::toRecord))
             // Persist progress after every successful provider batch. The version predicate in
             // markVersionSynced prevents a concurrent edit from being marked as uploaded.
@@ -395,7 +395,7 @@ object HealthConnectBackend {
                 deletion.start >= readablePeriodStart.toEpochMilli()
             }
             .map { it.healthConnectId }
-        for (chunk in tombstoneIds.chunked(PAGE_SIZE)) {
+        for (chunk in tombstoneIds.chunked(HEALTH_CONNECT_BATCH_SIZE)) {
             val clientIds = chunk.map { CLIENT_ID_PREFIX + it }
             val recordIds = clientIds.mapNotNull { remoteByClientId[it]?.metadata?.id }
             if (recordIds.isNotEmpty()) {
@@ -433,7 +433,7 @@ object HealthConnectBackend {
                 ReadRecordsRequest<SleepSessionRecord>(
                     timeRangeFilter = TimeRangeFilter.after(readablePeriodStart),
                     dataOriginFilter = setOf(DataOrigin(packageName)),
-                    pageSize = PAGE_SIZE,
+                    pageSize = HEALTH_CONNECT_BATCH_SIZE,
                     pageToken = pageToken
                 )
             )
