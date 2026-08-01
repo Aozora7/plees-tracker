@@ -1,5 +1,5 @@
 /*
- * Copyright 2026 aozora.one
+ * Copyright 2026 Aleksandrs Serbajevs
  *
  * SPDX-License-Identifier: MIT
  */
