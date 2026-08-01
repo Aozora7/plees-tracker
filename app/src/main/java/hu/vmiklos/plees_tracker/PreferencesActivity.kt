@@ -20,7 +20,6 @@ import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.edit
-import androidx.core.net.toUri
 import androidx.health.connect.client.HealthConnectClient
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
@@ -48,9 +47,6 @@ class PreferencesActivity : AppCompatActivity() {
         private const val HEALTH_CONNECT_READ_TIMEOUT_MS = 30_000L
         private const val HEALTH_CONNECT_RETRY_INITIAL_DELAY_MS = 1_000L
         private const val HEALTH_CONNECT_RETRY_MAX_DELAY_MS = 30_000L
-        private const val HEALTH_CONNECT_APP_URL =
-            "https://play.google.com/store/apps/details?id=com.google.android.apps.healthdata"
-
         internal const val HEALTH_CONNECT_CHECK_ACTIONS_KEY = "health_connect_check_actions"
     }
 
@@ -207,13 +203,13 @@ class PreferencesActivity : AppCompatActivity() {
         }
 
     fun openHealthConnectProvider() {
-        try {
-            startActivity(HealthConnectBackend.providerUpdateIntent())
-        } catch (e: Exception) {
-            Log.e(TAG, "openHealthConnectProvider: $e")
-            startActivity(
-                Intent(Intent.ACTION_VIEW, (HEALTH_CONNECT_APP_URL).toUri())
-            )
+        for (intent in HealthConnectProviderInstaller.updateIntents()) {
+            try {
+                startActivity(intent)
+                return
+            } catch (e: Exception) {
+                Log.e(TAG, "openHealthConnectProvider: $e")
+            }
         }
     }
 

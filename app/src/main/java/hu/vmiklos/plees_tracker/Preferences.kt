@@ -158,9 +158,15 @@ class Preferences : PreferenceFragmentCompat() {
             }
             HealthConnectBackend.Availability.UPDATE_REQUIRED -> {
                 HealthConnectBackend.setEnabled(requireContext(), false)
-                preference.isEnabled = true
+                preference.isEnabled = HealthConnectProviderInstaller.isSupported
                 preference.isChecked = false
-                preference.setSummary(R.string.settings_health_connect_update)
+                preference.setSummary(
+                    if (HealthConnectProviderInstaller.isSupported) {
+                        R.string.settings_health_connect_update
+                    } else {
+                        R.string.settings_health_connect_update_manually
+                    }
+                )
             }
             HealthConnectBackend.Availability.AVAILABLE -> {
                 preference.isEnabled = true
