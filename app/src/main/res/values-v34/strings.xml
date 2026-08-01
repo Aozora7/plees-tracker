@@ -1,6 +1,0 @@
-<resources>
-    <plurals name="health_connect_import_message">
-        <item quantity="one">Health Connect contains %d sleep previously written by Plees Tracker that are not in this installation. You can import it to this installation, ignore it, or wipe health connect before synchronizing.</item>
-        <item quantity="other">Health Connect contains %d sleeps previously written by Plees Tracker that are not in this installation. You can import them to this installation, ignore them, or wipe health connect before synchronizing. </item>
-    </plurals>
-</resources>

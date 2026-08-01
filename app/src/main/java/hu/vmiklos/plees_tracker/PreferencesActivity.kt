@@ -367,11 +367,17 @@ class PreferencesActivity : AppCompatActivity() {
             return
         }
         healthConnectImportDialogShowing = true
+        val canReadAllHistory = HealthConnectBackend.canReadAllHistory(applicationContext)
+        val message = if (canReadAllHistory) {
+            R.plurals.health_connect_import_message_all_history
+        } else {
+            R.plurals.health_connect_import_message
+        }
         val builder = AlertDialog.Builder(this)
             .setTitle(R.string.health_connect_import_title)
             .setMessage(
                 resources.getQuantityString(
-                    R.plurals.health_connect_import_message,
+                    message,
                     sleeps.size,
                     sleeps.size
                 )
@@ -386,7 +392,7 @@ class PreferencesActivity : AppCompatActivity() {
                 finishHealthConnectEnable()
             }
             .setCancelable(false)
-        if (HealthConnectBackend.canReadAllHistory(applicationContext)) {
+        if (canReadAllHistory) {
             builder.setNeutralButton(R.string.health_connect_wipe, null)
         }
         val dialog = builder.create()
@@ -394,7 +400,7 @@ class PreferencesActivity : AppCompatActivity() {
             healthConnectImportDialogShowing = false
         }
         dialog.setOnShowListener {
-            if (!HealthConnectBackend.canReadAllHistory(applicationContext)) {
+            if (!canReadAllHistory) {
                 return@setOnShowListener
             }
             val importButton = dialog.getButton(DialogInterface.BUTTON_POSITIVE)
