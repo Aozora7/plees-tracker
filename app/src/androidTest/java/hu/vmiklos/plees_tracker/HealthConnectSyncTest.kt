@@ -7,9 +7,11 @@
 package hu.vmiklos.plees_tracker
 
 import android.content.Context
+import android.content.SharedPreferences
 import android.os.RemoteException
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.records.Record
+import androidx.health.connect.client.records.SleepSessionRecord
 import androidx.health.connect.client.request.ReadRecordsRequest
 import androidx.health.connect.client.response.InsertRecordsResponse
 import androidx.health.connect.client.response.ReadRecordsResponse
@@ -60,7 +62,7 @@ class HealthConnectSyncTest {
     }
 
     @Test
-    fun testCreateAndDelete() = runBlocking {
+    fun testCreate() = runBlocking {
         val sleep = sleep(1).apply {
             comment = "edited"
         }
@@ -70,6 +72,13 @@ class HealthConnectSyncTest {
         val records = HealthConnectBackend.readOwnRecords(client, packageName)
         assertEquals(1, records.size)
         assertEquals(HealthConnectNotes.encode(sleep), records.single().notes)
+    }
+
+    @Test
+    fun testDeleteClearsTombstone() = runBlocking {
+        val sleep = sleep(1)
+        database.sleepDao().insert(sleep)
+        HealthConnectBackend.sync(client, packageName)
 
         database.healthConnectDao().insertDeletions(
             listOf(HealthConnectDeletion(sleep.healthConnectId))
@@ -120,26 +129,15 @@ class HealthConnectSyncTest {
     }
 
     @Test
-    fun testWriteBatchesCheckpointProgress() = runBlocking {
-        database.sleepDao().insert((1..1001).map(::sleep))
-        var calls = 0
-        val secondBatchFailureClient = object : HealthConnectClient by client {
-            override suspend fun insertRecords(records: List<Record>): InsertRecordsResponse {
-                calls++
-                if (calls == 2) {
-                    throw RemoteException("rate limited")
-                }
-                return client.insertRecords(records)
-            }
-        }
-
-        try {
-            HealthConnectBackend.write(secondBatchFailureClient)
-        } catch (_: RemoteException) {
-            // The successful first chunk must stay checkpointed.
-        }
+    fun testWriteBatchesCheckpointProgressAfterFailure() = runBlocking {
+        failSecondWriteBatch()
 
         assertEquals(1, database.sleepDao().getPendingHealthConnectWrites().size)
+    }
+
+    @Test
+    fun testWriteBatchesResumeAfterFailure() = runBlocking {
+        failSecondWriteBatch()
 
         HealthConnectBackend.write(client)
 
@@ -240,46 +238,26 @@ class HealthConnectSyncTest {
     }
 
     @Test
-    fun testEnabledStateUsesBackupExcludedPreferences() {
-        val localPreferences = HealthConnectBackend.localPreferences(context)
-        val backedUpPreferences = PreferenceManager.getDefaultSharedPreferences(context)
-        val hadLocalValue = localPreferences.contains(HealthConnectBackend.ENABLED_KEY)
-        val previousLocalValue = localPreferences.getBoolean(
-            HealthConnectBackend.ENABLED_KEY,
-            false
-        )
-        val hadBackedUpValue = backedUpPreferences.contains(HealthConnectBackend.ENABLED_KEY)
-        val previousBackedUpValue = backedUpPreferences.getBoolean(
-            HealthConnectBackend.ENABLED_KEY,
-            false
-        )
-        try {
+    fun testDisabledStateUsesBackupExcludedPreferences() {
+        withRestoredEnabledPreferences { backedUpPreferences ->
             backedUpPreferences.edit()
                 .putBoolean(HealthConnectBackend.ENABLED_KEY, true)
                 .commit()
             HealthConnectBackend.setEnabled(context, false)
-            assertFalse(HealthConnectBackend.isEnabled(context))
 
+            assertFalse(HealthConnectBackend.isEnabled(context))
+        }
+    }
+
+    @Test
+    fun testEnabledStateUsesBackupExcludedPreferences() {
+        withRestoredEnabledPreferences { backedUpPreferences ->
             backedUpPreferences.edit()
                 .putBoolean(HealthConnectBackend.ENABLED_KEY, false)
                 .commit()
             HealthConnectBackend.setEnabled(context, true)
+
             assertTrue(HealthConnectBackend.isEnabled(context))
-        } finally {
-            localPreferences.edit().apply {
-                if (hadLocalValue) {
-                    putBoolean(HealthConnectBackend.ENABLED_KEY, previousLocalValue)
-                } else {
-                    remove(HealthConnectBackend.ENABLED_KEY)
-                }
-            }.commit()
-            backedUpPreferences.edit().apply {
-                if (hadBackedUpValue) {
-                    putBoolean(HealthConnectBackend.ENABLED_KEY, previousBackedUpValue)
-                } else {
-                    remove(HealthConnectBackend.ENABLED_KEY)
-                }
-            }.commit()
         }
     }
 
@@ -359,20 +337,32 @@ class HealthConnectSyncTest {
     }
 
     @Test
-    fun testRateLimitedOperationsEventuallyComplete() = runBlocking {
+    fun testRateLimitedWriteEventuallyCompletes() = runBlocking {
         val sleep = sleep(1)
         database.sleepDao().insert(sleep)
         val rateLimitedClient = AlternatingRateLimitClient(client)
 
-        assertTrue(syncUntilSuccess(rateLimitedClient) > 1)
+        val attempts = syncUntilSuccess(rateLimitedClient)
+
+        assertTrue(attempts > 1)
         assertEquals(1, HealthConnectBackend.readOwnRecords(client, packageName).size)
+    }
+
+    @Test
+    fun testRateLimitedDeletionEventuallyCompletes() = runBlocking {
+        val sleep = sleep(1)
+        database.sleepDao().insert(sleep)
+        client.insertRecords(listOf(HealthConnectBackend.toRecord(sleep)))
 
         database.healthConnectDao().insertDeletions(
             listOf(HealthConnectDeletion(sleep.healthConnectId))
         )
         database.sleepDao().delete(sleep)
+        val rateLimitedClient = AlternatingRateLimitClient(client)
 
-        assertTrue(syncUntilSuccess(rateLimitedClient) > 1)
+        val attempts = syncUntilSuccess(rateLimitedClient)
+
+        assertTrue(attempts > 1)
         assertEquals(0, database.healthConnectDao().getDeletions().size)
     }
 
@@ -440,38 +430,15 @@ class HealthConnectSyncTest {
     }
 
     @Test
-    fun testDeletionBatchesCheckpointProgress() = runBlocking {
-        val deletions = (1..2300).map { index ->
-            HealthConnectDeletion(
-                UUID.nameUUIDFromBytes(index.toString().toByteArray()).toString()
-            )
-        }
-        database.healthConnectDao().insertDeletions(deletions)
-        val remoteByClientId = (1..2300).associate { index ->
-            val sleep = sleep(index)
-            HealthConnectBackend.CLIENT_ID_PREFIX + sleep.healthConnectId to
-                HealthConnectBackend.toRecord(sleep)
-        }
-        var calls = 0
-        val secondBatchFailureClient = object : HealthConnectClient by client {
-            override suspend fun deleteRecords(
-                recordType: KClass<out Record>,
-                recordIdsList: List<String>,
-                clientRecordIdsList: List<String>
-            ) {
-                calls++
-                if (calls == 2) {
-                    throw RemoteException("rate limited")
-                }
-            }
-        }
+    fun testDeletionBatchesCheckpointProgressAfterFailure() = runBlocking {
+        failSecondDeletionBatch()
 
-        try {
-            HealthConnectBackend.deletePending(secondBatchFailureClient, remoteByClientId)
-        } catch (_: RemoteException) {
-            // The successful first chunk must stay checkpointed.
-        }
         assertEquals(1300, database.healthConnectDao().getDeletions().size)
+    }
+
+    @Test
+    fun testDeletionBatchesResumeAfterFailure() = runBlocking {
+        val remoteByClientId = failSecondDeletionBatch()
 
         val succeedingClient = object : HealthConnectClient by client {
             override suspend fun deleteRecords(
@@ -486,7 +453,7 @@ class HealthConnectSyncTest {
     }
 
     @Test
-    fun testUnmatchedHistoricalRecordSurvivesSyncAndUnrelatedDeletion() = runBlocking {
+    fun testUnmatchedHistoricalRecordSurvivesSync() = runBlocking {
         val historical = sleep(1)
         client.insertRecords(listOf(HealthConnectBackend.toRecord(historical)))
 
@@ -501,6 +468,17 @@ class HealthConnectSyncTest {
                 .map { it.removePrefix(HealthConnectBackend.CLIENT_ID_PREFIX) }
                 .toSet()
         )
+    }
+
+    @Test
+    fun testUnmatchedHistoricalRecordSurvivesUnrelatedDeletion() = runBlocking {
+        val historical = sleep(1)
+        client.insertRecords(listOf(HealthConnectBackend.toRecord(historical)))
+
+        val current = sleep(2)
+        database.sleepDao().insert(current)
+        HealthConnectBackend.sync(client, packageName)
+        val records = HealthConnectBackend.readOwnRecords(client, packageName)
 
         database.healthConnectDao().insertDeletions(
             listOf(HealthConnectDeletion(current.healthConnectId))
@@ -592,6 +570,91 @@ class HealthConnectSyncTest {
         start = index * 3_000L
         stop = start + 1_000
         healthConnectId = UUID.nameUUIDFromBytes(index.toString().toByteArray()).toString()
+    }
+
+    private suspend fun failSecondWriteBatch() {
+        database.sleepDao().insert((1..1001).map(::sleep))
+        var calls = 0
+        val secondBatchFailureClient = object : HealthConnectClient by client {
+            override suspend fun insertRecords(records: List<Record>): InsertRecordsResponse {
+                calls++
+                if (calls == 2) {
+                    throw RemoteException("rate limited")
+                }
+                return client.insertRecords(records)
+            }
+        }
+        try {
+            HealthConnectBackend.write(secondBatchFailureClient)
+        } catch (_: RemoteException) {
+            // The successful first chunk must stay checkpointed.
+        }
+    }
+
+    private fun withRestoredEnabledPreferences(block: (SharedPreferences) -> Unit) {
+        val localPreferences = HealthConnectBackend.localPreferences(context)
+        val backedUpPreferences = PreferenceManager.getDefaultSharedPreferences(context)
+        val hadLocalValue = localPreferences.contains(HealthConnectBackend.ENABLED_KEY)
+        val previousLocalValue = localPreferences.getBoolean(
+            HealthConnectBackend.ENABLED_KEY,
+            false
+        )
+        val hadBackedUpValue = backedUpPreferences.contains(HealthConnectBackend.ENABLED_KEY)
+        val previousBackedUpValue = backedUpPreferences.getBoolean(
+            HealthConnectBackend.ENABLED_KEY,
+            false
+        )
+        try {
+            block(backedUpPreferences)
+        } finally {
+            localPreferences.edit().apply {
+                if (hadLocalValue) {
+                    putBoolean(HealthConnectBackend.ENABLED_KEY, previousLocalValue)
+                } else {
+                    remove(HealthConnectBackend.ENABLED_KEY)
+                }
+            }.commit()
+            backedUpPreferences.edit().apply {
+                if (hadBackedUpValue) {
+                    putBoolean(HealthConnectBackend.ENABLED_KEY, previousBackedUpValue)
+                } else {
+                    remove(HealthConnectBackend.ENABLED_KEY)
+                }
+            }.commit()
+        }
+    }
+
+    private suspend fun failSecondDeletionBatch(): Map<String, SleepSessionRecord> {
+        val deletions = (1..2300).map { index ->
+            HealthConnectDeletion(
+                UUID.nameUUIDFromBytes(index.toString().toByteArray()).toString()
+            )
+        }
+        database.healthConnectDao().insertDeletions(deletions)
+        val remoteByClientId = (1..2300).associate { index ->
+            val sleep = sleep(index)
+            HealthConnectBackend.CLIENT_ID_PREFIX + sleep.healthConnectId to
+                HealthConnectBackend.toRecord(sleep)
+        }
+        var calls = 0
+        val secondBatchFailureClient = object : HealthConnectClient by client {
+            override suspend fun deleteRecords(
+                recordType: KClass<out Record>,
+                recordIdsList: List<String>,
+                clientRecordIdsList: List<String>
+            ) {
+                calls++
+                if (calls == 2) {
+                    throw RemoteException("rate limited")
+                }
+            }
+        }
+        try {
+            HealthConnectBackend.deletePending(secondBatchFailureClient, remoteByClientId)
+        } catch (_: RemoteException) {
+            // The successful first chunk must stay checkpointed.
+        }
+        return remoteByClientId
     }
 
     private suspend fun syncUntilSuccess(client: HealthConnectClient): Int {
