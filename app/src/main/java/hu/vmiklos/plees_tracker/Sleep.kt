@@ -36,12 +36,15 @@ class Sleep {
     @ColumnInfo(name = "wakes")
     var wakes: Int = 0
 
+    // Identifies the record across devices, where sid values can collide.
     @ColumnInfo(name = "health_connect_id")
     var healthConnectId: String = UUID.randomUUID().toString()
 
+    // Incremented on edits and sent to Health Connect to order updates.
     @ColumnInfo(name = "health_connect_version")
     var healthConnectVersion: Long = 0
 
+    // Stores the last uploaded healthConnectVersion; unequal values mean a write is pending.
     @ColumnInfo(name = "health_connect_synced_version")
     var healthConnectSyncedVersion: Long = -1
 
