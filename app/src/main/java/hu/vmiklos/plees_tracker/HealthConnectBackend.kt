@@ -14,7 +14,6 @@ import android.os.Build
 import android.util.Log
 import androidx.activity.result.contract.ActivityResultContract
 import androidx.annotation.RequiresApi
-import androidx.core.net.toUri
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.HealthConnectFeatures
 import androidx.health.connect.client.PermissionController
@@ -43,7 +42,6 @@ object HealthConnectBackend {
     internal const val CLIENT_ID_PREFIX = "plees-sleep:"
     internal const val LOCAL_PREFERENCES_NAME = "health_connect_local"
     internal const val READ_CUTOFF_KEY = "health_connect_read_cutoff"
-    private const val PROVIDER_PACKAGE_NAME = "com.google.android.apps.healthdata"
     private const val WORK_NAME = "health_connect_sync"
     private const val PAGE_SIZE = 1000
     private const val LEGACY_READ_MILLIS = 30L * 24 * 60 * 60 * 1000
@@ -96,11 +94,6 @@ object HealthConnectBackend {
 
     fun cancelSync(context: Context) {
         WorkManager.getInstance(context).cancelUniqueWork(WORK_NAME)
-    }
-
-    fun providerUpdateIntent(): Intent = Intent(Intent.ACTION_VIEW).apply {
-        data = "market://details?id=$PROVIDER_PACKAGE_NAME".toUri()
-        setPackage("com.android.vending")
     }
 
     fun permissionSettingsIntent(context: Context): Intent {
