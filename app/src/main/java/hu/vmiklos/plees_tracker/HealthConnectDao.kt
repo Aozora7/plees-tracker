@@ -29,6 +29,9 @@ interface HealthConnectDao {
         }
     }
 
+    @Query("UPDATE sleep SET health_connect_id = :id WHERE sid = :sid AND health_connect_id = ''")
+    suspend fun assignId(sid: Int, id: String)
+
     @Query(
         "UPDATE sleep SET health_connect_version = :version " +
             "WHERE health_connect_id = :id AND health_connect_version = :expectedVersion"
