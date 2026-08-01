@@ -315,7 +315,8 @@ class HealthConnectSyncTest {
 
     @Test
     fun testWipeDeletesAllOwnedRecordsInBatches() = runBlocking {
-        val records = (1..1001).map { HealthConnectBackend.toRecord(sleep(it)) }
+        val recordCount = HealthConnectBackend.HEALTH_CONNECT_BATCH_SIZE + 1
+        val records = (1..recordCount).map { HealthConnectBackend.toRecord(sleep(it)) }
         client.insertRecords(records)
         val batchSizes = mutableListOf<Int>()
         val clientRecordIdBatches = mutableListOf<List<String>>()
@@ -524,11 +525,12 @@ class HealthConnectSyncTest {
 
     @Test
     fun testBatchingAndPagination() = runBlocking {
-        database.sleepDao().insert((1..1001).map(::sleep))
+        val sleepCount = HealthConnectBackend.HEALTH_CONNECT_BATCH_SIZE + 1
+        database.sleepDao().insert((1..sleepCount).map(::sleep))
 
         HealthConnectBackend.sync(client, packageName)
 
-        assertEquals(1001, HealthConnectBackend.readOwnRecords(client, packageName).size)
+        assertEquals(sleepCount, HealthConnectBackend.readOwnRecords(client, packageName).size)
         assertEquals(0, database.sleepDao().getPendingHealthConnectWrites().size)
     }
 
@@ -573,7 +575,8 @@ class HealthConnectSyncTest {
     }
 
     private suspend fun failSecondWriteBatch() {
-        database.sleepDao().insert((1..1001).map(::sleep))
+        val sleepCount = HealthConnectBackend.HEALTH_CONNECT_BATCH_SIZE + 1
+        database.sleepDao().insert((1..sleepCount).map(::sleep))
         var calls = 0
         val secondBatchFailureClient = object : HealthConnectClient by client {
             override suspend fun insertRecords(records: List<Record>): InsertRecordsResponse {
