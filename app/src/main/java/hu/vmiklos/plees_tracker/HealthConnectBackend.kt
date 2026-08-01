@@ -346,13 +346,17 @@ object HealthConnectBackend {
 
     @RequiresApi(Build.VERSION_CODES.P)
     internal suspend fun write(client: HealthConnectClient) {
-        val pending = DataModel.database.sleepDao().getPendingHealthConnectWrites()
-        write(client, validSleeps(pending))
+        val pending = validSleeps(DataModel.database.sleepDao().getPendingHealthConnectWrites())
+        write(client, pending)
     }
 
     @RequiresApi(Build.VERSION_CODES.P)
     private suspend fun write(client: HealthConnectClient, sleeps: List<Sleep>) {
         val healthDao = DataModel.database.healthConnectDao()
+        for (sleep in sleeps.filter { it.healthConnectId.isEmpty() }) {
+            sleep.healthConnectId = UUID.randomUUID().toString()
+            healthDao.assignId(sleep.sid, sleep.healthConnectId)
+        }
         for (chunk in sleeps.chunked(PAGE_SIZE)) {
             client.insertRecords(chunk.map(::toRecord))
             // Persist progress after every successful provider batch. The version predicate in

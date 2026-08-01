@@ -11,12 +11,11 @@ import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
-import java.util.UUID
 
 /**
  * Represents one tracked sleep.
  */
-@Entity(indices = [Index(value = ["health_connect_id"], unique = true)])
+@Entity(indices = [Index(value = ["health_connect_id"])])
 class Sleep {
     @PrimaryKey(autoGenerate = true)
     var sid: Int = 0
@@ -38,7 +37,7 @@ class Sleep {
 
     // Identifies the record across devices, where sid values can collide.
     @ColumnInfo(name = "health_connect_id")
-    var healthConnectId: String = UUID.randomUUID().toString()
+    var healthConnectId: String = ""
 
     // Incremented on edits and sent to Health Connect to order updates.
     @ColumnInfo(name = "health_connect_version")

@@ -28,6 +28,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -95,6 +96,26 @@ class HealthConnectSyncTest {
         HealthConnectBackend.write(noReadClient)
 
         assertEquals(1, HealthConnectBackend.readOwnRecords(client, packageName).size)
+        assertEquals(0, database.sleepDao().getPendingHealthConnectWrites().size)
+    }
+
+    @Test
+    fun testWriteAssignsMissingIds() = runBlocking {
+        val first = Sleep().apply {
+            start = 1_000
+            stop = 2_000
+        }
+        val second = Sleep().apply {
+            start = 3_000
+            stop = 4_000
+        }
+        database.sleepDao().insert(listOf(first, second))
+
+        HealthConnectBackend.write(client)
+
+        val sleeps = database.sleepDao().getAll()
+        assertTrue(sleeps.all { it.healthConnectId.isNotEmpty() })
+        assertNotEquals(sleeps[0].healthConnectId, sleeps[1].healthConnectId)
         assertEquals(0, database.sleepDao().getPendingHealthConnectWrites().size)
     }
 

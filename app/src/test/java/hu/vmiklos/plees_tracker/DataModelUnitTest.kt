@@ -20,12 +20,12 @@ import org.junit.Test
  */
 class DataModelUnitTest {
     @Test
-    fun testParseLegacySleepCsvGeneratesHealthConnectIdentity() = runBlocking {
+    fun testParseLegacySleepCsvLeavesHealthConnectIdentityEmpty() = runBlocking {
         val csv = "sid,start,stop,rating,comment,wakes\n0,10000,20000,3,hi,2\n"
 
         val sleep = DataModel.parseSleepsCsv(StringReader(csv))?.single() ?: Sleep()
 
-        assertTrue(sleep.healthConnectId.isNotEmpty())
+        assertTrue(sleep.healthConnectId.isEmpty())
         assertEquals(0L, sleep.healthConnectVersion)
     }
 

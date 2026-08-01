@@ -72,19 +72,13 @@ val MIGRATION_4_5 = object : Migration(4, 5) {
             "ALTER TABLE sleep ADD COLUMN health_connect_id TEXT NOT NULL DEFAULT ''"
         )
         db.execSQL(
-            "UPDATE sleep SET health_connect_id = " +
-                "lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-' || " +
-                "lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(2))) || '-' || " +
-                "lower(hex(randomblob(6)))"
-        )
-        db.execSQL(
             "ALTER TABLE sleep ADD COLUMN health_connect_version INTEGER NOT NULL DEFAULT 0"
         )
         db.execSQL(
             "ALTER TABLE sleep ADD COLUMN health_connect_synced_version INTEGER NOT NULL DEFAULT -1"
         )
         db.execSQL(
-            "CREATE UNIQUE INDEX index_Sleep_health_connect_id ON sleep(health_connect_id)"
+            "CREATE INDEX index_Sleep_health_connect_id ON sleep(health_connect_id)"
         )
         db.execSQL(
             "CREATE TABLE IF NOT EXISTS health_connect_deletion (" +
@@ -244,7 +238,9 @@ object DataModel {
 
     suspend fun insertSleep(sleep: Sleep) {
         database.withTransaction {
-            database.healthConnectDao().deleteDeletions(listOf(sleep.healthConnectId))
+            if (sleep.healthConnectId.isNotEmpty()) {
+                database.healthConnectDao().deleteDeletions(listOf(sleep.healthConnectId))
+            }
             database.sleepDao().insert(sleep)
         }
         scheduleHealthConnectSync()
@@ -256,7 +252,7 @@ object DataModel {
         }
         database.withTransaction {
             database.healthConnectDao().deleteDeletionsBatched(
-                sleepList.map { it.healthConnectId }
+                sleepList.map { it.healthConnectId }.filter { it.isNotEmpty() }
             )
             database.sleepDao().insert(sleepList)
         }
@@ -270,7 +266,9 @@ object DataModel {
 
     suspend fun deleteSleep(sleep: Sleep) {
         database.withTransaction {
-            database.healthConnectDao().insertDeletions(listOf(deletionFor(sleep)))
+            if (sleep.healthConnectId.isNotEmpty()) {
+                database.healthConnectDao().insertDeletions(listOf(deletionFor(sleep)))
+            }
             database.sleepDao().delete(sleep)
         }
         scheduleHealthConnectSync()
@@ -279,7 +277,9 @@ object DataModel {
     suspend fun deleteAllSleep() {
         database.withTransaction {
             val sleeps = database.sleepDao().getAll()
-            database.healthConnectDao().insertDeletions(sleeps.map(::deletionFor))
+            database.healthConnectDao().insertDeletions(
+                sleeps.filter { it.healthConnectId.isNotEmpty() }.map(::deletionFor)
+            )
             database.sleepDao().deleteAll()
         }
         scheduleHealthConnectSync()
@@ -374,7 +374,7 @@ object DataModel {
                         UUID.fromString(id)
                         sleep.healthConnectId = id
                     } catch (_: IllegalArgumentException) {
-                        // Keep the freshly-generated ID for invalid or legacy values.
+                        // Keep the empty ID for invalid or legacy values.
                     }
                 }
                 if (cells.isSet(7)) {
@@ -397,10 +397,12 @@ object DataModel {
      */
     private suspend fun insertNewSleeps(importedSleeps: List<Sleep>) {
         val oldSleeps = database.sleepDao().getAll()
-        val usedIds = oldSleeps.mapTo(mutableSetOf()) { it.healthConnectId }
+        val usedIds = oldSleeps.mapNotNullTo(mutableSetOf()) {
+            it.healthConnectId.ifEmpty { null }
+        }
         val newSleeps = importedSleeps.subtract(oldSleeps.toSet()).onEach { sleep ->
-            while (!usedIds.add(sleep.healthConnectId)) {
-                sleep.healthConnectId = UUID.randomUUID().toString()
+            if (sleep.healthConnectId.isNotEmpty() && !usedIds.add(sleep.healthConnectId)) {
+                sleep.healthConnectId = ""
                 sleep.healthConnectVersion = 0
             }
         }

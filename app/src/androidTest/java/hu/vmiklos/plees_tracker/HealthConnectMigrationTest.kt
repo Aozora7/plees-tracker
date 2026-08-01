@@ -13,11 +13,9 @@ import androidx.sqlite.db.SupportSQLiteOpenHelper
 import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import java.util.UUID
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotEquals
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -52,7 +50,7 @@ class HealthConnectMigrationTest {
     }
 
     @Test
-    fun testMigrationCreatesIdentitiesAndTombstones() = runBlocking {
+    fun testMigrationCreatesHealthConnectStateAndTombstones() = runBlocking {
         openHelper(5) { database -> MIGRATION_4_5.migrate(database) }.close()
 
         val roomDatabase = Room.databaseBuilder(context, AppDatabase::class.java, databaseName)
@@ -61,9 +59,8 @@ class HealthConnectMigrationTest {
         try {
             val sleeps = roomDatabase.sleepDao().getAll()
             assertEquals(2, sleeps.size)
-            UUID.fromString(sleeps[0].healthConnectId)
-            UUID.fromString(sleeps[1].healthConnectId)
-            assertNotEquals(sleeps[0].healthConnectId, sleeps[1].healthConnectId)
+            assertEquals("", sleeps[0].healthConnectId)
+            assertEquals("", sleeps[1].healthConnectId)
             assertEquals(0, sleeps[0].healthConnectVersion)
             assertEquals(-1, sleeps[0].healthConnectSyncedVersion)
 
