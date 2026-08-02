@@ -26,6 +26,22 @@ class HealthConnectNotesUnitTest {
     }
 
     @Test
+    fun testEmptyMetadataRoundTrip() {
+        val decoded = HealthConnectNotes.decode(
+            HealthConnectNotes.encode(sleep(comment = "", rating = 0, wakes = 0))
+        )
+
+        assertEquals(HealthConnectNotes.Values("", 0, 0), decoded)
+    }
+
+    @Test
+    fun testNullNotesDecodeAsEmptyMetadata() {
+        val decoded = HealthConnectNotes.decode(null)
+
+        assertEquals(HealthConnectNotes.Values("", 0, 0), decoded)
+    }
+
+    @Test
     fun testOneSpecifiedMetadataValueWritesFooter() {
         assertEquals(
             "Plees Tracker metadata v1\nRating: 4\nWakes: 0",
