@@ -62,6 +62,53 @@ class HealthConnectSyncTest {
     }
 
     @Test
+    fun testNoForegroundWork() = runBlocking {
+        val hasWork = HealthConnectBackend.hasForegroundWork(Instant.EPOCH)
+
+        assertFalse(hasWork)
+    }
+
+    @Test
+    fun testPendingWriteRequiresForegroundWork() = runBlocking {
+        database.sleepDao().insert(sleep(1))
+
+        val hasWork = HealthConnectBackend.hasForegroundWork(Instant.EPOCH)
+
+        assertTrue(hasWork)
+    }
+
+    @Test
+    fun testInvalidPendingWriteDoesNotRequireForegroundWork() = runBlocking {
+        database.sleepDao().insert(sleep(1).apply { stop = start })
+
+        val hasWork = HealthConnectBackend.hasForegroundWork(Instant.EPOCH)
+
+        assertFalse(hasWork)
+    }
+
+    @Test
+    fun testReadableDeletionRequiresForegroundWork() = runBlocking {
+        database.healthConnectDao().insertDeletions(
+            listOf(HealthConnectDeletion(sleep(1).healthConnectId, 3_000))
+        )
+
+        val hasWork = HealthConnectBackend.hasForegroundWork(Instant.ofEpochMilli(3_000))
+
+        assertTrue(hasWork)
+    }
+
+    @Test
+    fun testUnreadableDeletionDoesNotRequireForegroundWork() = runBlocking {
+        database.healthConnectDao().insertDeletions(
+            listOf(HealthConnectDeletion(sleep(1).healthConnectId, 2_999))
+        )
+
+        val hasWork = HealthConnectBackend.hasForegroundWork(Instant.ofEpochMilli(3_000))
+
+        assertFalse(hasWork)
+    }
+
+    @Test
     fun testCreate() = runBlocking {
         val sleep = sleep(1).apply {
             comment = "edited"

@@ -28,6 +28,13 @@ interface SleepDao {
     )
     suspend fun getPendingHealthConnectWrites(): List<Sleep>
 
+    @Query(
+        "SELECT EXISTS(SELECT 1 FROM sleep " +
+            "WHERE health_connect_synced_version != health_connect_version " +
+            "AND stop_date > start_date AND start_date >= :after)"
+    )
+    suspend fun hasPendingHealthConnectWrites(after: Long): Boolean
+
     @Query("SELECT * FROM sleep ORDER BY start_date DESC")
     fun getAllLive(): LiveData<List<Sleep>>
 
