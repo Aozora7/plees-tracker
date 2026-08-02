@@ -48,6 +48,7 @@ class PreferencesActivity : AppCompatActivity() {
         private const val HEALTH_CONNECT_RETRY_INITIAL_DELAY_MS = 1_000L
         private const val HEALTH_CONNECT_RETRY_MAX_DELAY_MS = 30_000L
         internal const val HEALTH_CONNECT_CHECK_ACTIONS_KEY = "health_connect_check_actions"
+        internal const val HEALTH_CONNECT_FORCE_SYNC_KEY = "health_connect_force_sync"
     }
 
     // Pending state of an in-flight folder-picker or Drive sign-in flow. The system activities
@@ -447,6 +448,7 @@ class PreferencesActivity : AppCompatActivity() {
             putBoolean(HealthConnectBackend.ENABLED_KEY, true)
             putBoolean(HealthConnectBackend.INITIALIZED_KEY, true)
         }
+        forceHealthConnectSync(showResult = false)
         lifecycleScope.launch {
             if (DataModel.hasSleeps() ||
                 DataModel.database.healthConnectDao().getDeletions().isNotEmpty()
@@ -455,6 +457,29 @@ class PreferencesActivity : AppCompatActivity() {
             }
         }
         refreshFragment()
+    }
+
+    fun forceHealthConnectSync() {
+        forceHealthConnectSync(showResult = true)
+    }
+
+    private fun forceHealthConnectSync(showResult: Boolean) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
+            return
+        }
+        lifecycleScope.launch {
+            try {
+                HealthConnectBackend.reconcileForeground(applicationContext, force = true)
+                if (showResult) {
+                    toast(R.string.health_connect_force_sync_finished)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "forceHealthConnectSync: $e")
+                if (showResult) {
+                    toast(R.string.health_connect_temporarily_unavailable)
+                }
+            }
+        }
     }
 
     override fun onSaveInstanceState(outState: Bundle) {

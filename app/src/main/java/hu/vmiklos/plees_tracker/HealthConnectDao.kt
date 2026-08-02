@@ -17,6 +17,9 @@ interface HealthConnectDao {
     @Query("SELECT * FROM health_connect_deletion")
     suspend fun getDeletions(): List<HealthConnectDeletion>
 
+    @Query("SELECT EXISTS(SELECT 1 FROM health_connect_deletion WHERE start_date >= :after)")
+    suspend fun hasDeletions(after: Long): Boolean
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertDeletions(deletions: List<HealthConnectDeletion>)
 

@@ -127,6 +127,18 @@ class Preferences : PreferenceFragmentCompat() {
             isVisible = false
             category.addPreference(this)
         }
+        Preference(requireContext()).apply {
+            key = PreferencesActivity.HEALTH_CONNECT_FORCE_SYNC_KEY
+            order = 2
+            setTitle(R.string.settings_health_connect_force_sync)
+            setSummary(R.string.settings_health_connect_force_sync_summary)
+            isVisible = false
+            setOnPreferenceClickListener {
+                (activity as? PreferencesActivity)?.forceHealthConnectSync()
+                true
+            }
+            category.addPreference(this)
+        }
     }
 
     private fun refreshHealthConnectState() {
@@ -137,6 +149,10 @@ class Preferences : PreferenceFragmentCompat() {
         val checking = (activity as? PreferencesActivity)?.healthConnectCheckPending == true
         findPreference<Preference>(PreferencesActivity.HEALTH_CONNECT_CHECK_ACTIONS_KEY)
             ?.isVisible = checking
+        val forceSyncPreference = findPreference<Preference>(
+            PreferencesActivity.HEALTH_CONNECT_FORCE_SYNC_KEY
+        )
+        forceSyncPreference?.isVisible = false
         if (checking) {
             // Reflect the attempted opt-in without enabling synchronization until the check or
             // an explicit skip completes.
@@ -194,6 +210,7 @@ class Preferences : PreferenceFragmentCompat() {
                                     R.string.settings_health_connect_off
                                 }
                             )
+                            forceSyncPreference?.isVisible = stored
                             return@launch
                         }
                     }
@@ -202,6 +219,7 @@ class Preferences : PreferenceFragmentCompat() {
                         HealthConnectBackend.cancelSync(requireContext())
                     }
                     preference.isChecked = stored && granted
+                    forceSyncPreference?.isVisible = preference.isChecked
                     preference.setSummary(
                         if (preference.isChecked) {
                             R.string.settings_health_connect_on

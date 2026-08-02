@@ -226,14 +226,25 @@ object HealthConnectBackend {
     }
 
     @RequiresApi(Build.VERSION_CODES.P)
-    suspend fun reconcileForeground(context: Context) {
+    suspend fun reconcileForeground(context: Context, force: Boolean = false) {
         if (!isEnabled(context)) {
+            return
+        }
+        val readablePeriodStart = readablePeriodStart(context)
+        if (!force && !hasForegroundWork(readablePeriodStart)) {
             return
         }
         val client = HealthConnectClient.getOrCreate(context)
         operationMutex.withLock {
-            sync(client, context.packageName, readablePeriodStart(context))
+            sync(client, context.packageName, readablePeriodStart)
         }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.P)
+    internal suspend fun hasForegroundWork(readablePeriodStart: Instant): Boolean {
+        val after = readablePeriodStart.toEpochMilli()
+        return DataModel.database.sleepDao().hasPendingHealthConnectWrites(after) ||
+            DataModel.database.healthConnectDao().hasDeletions(after)
     }
 
     /** Deletes every sleep record whose Health Connect data origin is this app. */

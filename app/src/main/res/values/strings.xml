@@ -65,6 +65,9 @@
     <string name="settings_health_connect_unavailable">Requires Android 9 or newer and Health Connect</string>
     <string name="settings_health_connect_update">Install or update Health Connect to enable</string>
     <string name="settings_health_connect_update_manually">Install or update Health Connect separately to enable</string>
+    <string name="settings_health_connect_force_sync">Force sync</string>
+    <string name="settings_health_connect_force_sync_summary">Add, update, or delete Health Connect sleep records to match Plees Tracker</string>
+    <string name="health_connect_force_sync_finished">Health Connect sync finished</string>
     <string name="health_connect_permission_denied_title">Health Connect permission required</string>
     <string name="health_connect_permission_denied_message">Sleep access was not granted. Allow Plees Tracker to write sleep data in Health Connect settings to enable synchronization.</string>
     <string name="health_connect_temporarily_unavailable">Health Connect is temporarily unavailable. Try again later.</string>
