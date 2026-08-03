@@ -26,11 +26,13 @@ import androidx.health.connect.client.request.ReadRecordsRequest
 import androidx.health.connect.client.time.TimeRangeFilter
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkInfo
 import androidx.work.WorkManager
+import androidx.work.workDataOf
 import java.time.Instant
 import java.util.UUID
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 
 /** Health Connect availability, permission, scheduling, and record synchronization. */
 object HealthConnectBackend {
@@ -43,15 +45,23 @@ object HealthConnectBackend {
     internal const val LOCAL_PREFERENCES_NAME = "health_connect_local"
     internal const val READ_CUTOFF_KEY = "health_connect_read_cutoff"
     internal const val HEALTH_CONNECT_BATCH_SIZE = 1000
+    internal const val OPERATION_KEY = "operation"
+    internal const val USER_INITIATED_KEY = "user_initiated"
+    internal const val FAILED_KEY = "failed"
     private const val WORK_NAME = "health_connect_sync"
     private const val LEGACY_READ_MILLIS = 30L * 24 * 60 * 60 * 1000
     private const val TAG = "HealthConnectBackend"
-    private val operationMutex = Mutex()
 
     enum class Availability {
         UNAVAILABLE,
         UPDATE_REQUIRED,
         AVAILABLE
+    }
+
+    internal enum class Operation {
+        WRITE,
+        RECONCILE,
+        WIPE
     }
 
     fun sdkStatus(context: Context): Int {
@@ -80,16 +90,77 @@ object HealthConnectBackend {
             .apply()
     }
 
+    private fun enqueue(
+        context: Context,
+        operation: Operation,
+        userInitiated: Boolean,
+        policy: ExistingWorkPolicy
+    ): UUID {
+        val request = OneTimeWorkRequestBuilder<HealthConnectWorker>()
+            .setInputData(
+                workDataOf(
+                    OPERATION_KEY to operation.name,
+                    USER_INITIATED_KEY to userInitiated
+                )
+            )
+            .build()
+        WorkManager.getInstance(context).enqueueUniqueWork(WORK_NAME, policy, request)
+        return request.id
+    }
+
     fun scheduleSync(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || !isEnabled(context)) {
             return
         }
-        val request = OneTimeWorkRequestBuilder<HealthConnectWorker>().build()
-        WorkManager.getInstance(context).enqueueUniqueWork(
-            WORK_NAME,
-            ExistingWorkPolicy.REPLACE,
-            request
+        enqueue(
+            context,
+            Operation.WRITE,
+            userInitiated = false,
+            ExistingWorkPolicy.APPEND_OR_REPLACE
         )
+    }
+
+    @RequiresApi(Build.VERSION_CODES.P)
+    suspend fun scheduleReconcile(context: Context) {
+        if (!isEnabled(context) || !hasForegroundWork(readablePeriodStart(context))) {
+            return
+        }
+        enqueue(
+            context,
+            Operation.RECONCILE,
+            userInitiated = false,
+            ExistingWorkPolicy.APPEND_OR_REPLACE
+        )
+    }
+
+    fun forceReconcile(context: Context): UUID? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || !isEnabled(context)) {
+            return null
+        }
+        return enqueue(
+            context,
+            Operation.RECONCILE,
+            userInitiated = true,
+            ExistingWorkPolicy.REPLACE
+        )
+    }
+
+    fun scheduleWipe(context: Context): UUID? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
+            return null
+        }
+        return enqueue(context, Operation.WIPE, userInitiated = true, ExistingWorkPolicy.REPLACE)
+    }
+
+    internal suspend fun awaitSuccess(context: Context, id: UUID): Boolean? {
+        val info = WorkManager.getInstance(context)
+            .getWorkInfoByIdFlow(id)
+            .filterNotNull()
+            .first { it.state.isFinished }
+        if (info.state != WorkInfo.State.SUCCEEDED) {
+            return null
+        }
+        return !info.outputData.getBoolean(FAILED_KEY, false)
     }
 
     fun cancelSync(context: Context) {
@@ -215,28 +286,24 @@ object HealthConnectBackend {
     }
 
     @RequiresApi(Build.VERSION_CODES.P)
-    suspend fun write(context: Context) {
-        if (!isEnabled(context)) {
+    internal suspend fun perform(context: Context, operation: Operation) {
+        if (operation != Operation.WIPE && !isEnabled(context)) {
             return
         }
         val client = HealthConnectClient.getOrCreate(context)
-        operationMutex.withLock {
-            write(client)
-        }
-    }
-
-    @RequiresApi(Build.VERSION_CODES.P)
-    suspend fun reconcileForeground(context: Context, force: Boolean = false) {
-        if (!isEnabled(context)) {
-            return
-        }
-        val readablePeriodStart = readablePeriodStart(context)
-        if (!force && !hasForegroundWork(readablePeriodStart)) {
-            return
-        }
-        val client = HealthConnectClient.getOrCreate(context)
-        operationMutex.withLock {
-            sync(client, context.packageName, readablePeriodStart)
+        when (operation) {
+            Operation.WRITE -> write(client)
+            Operation.RECONCILE -> sync(
+                client,
+                context.packageName,
+                readablePeriodStart(context)
+            )
+            Operation.WIPE -> {
+                check(canReadAllHistory(context)) {
+                    "Health Connect cannot expose all owned records on this system module"
+                }
+                wipe(client, context.packageName)
+            }
         }
     }
 
@@ -245,18 +312,6 @@ object HealthConnectBackend {
         val after = readablePeriodStart.toEpochMilli()
         return DataModel.database.sleepDao().hasPendingHealthConnectWrites(after) ||
             DataModel.database.healthConnectDao().hasDeletions(after)
-    }
-
-    /** Deletes every sleep record whose Health Connect data origin is this app. */
-    @RequiresApi(Build.VERSION_CODES.P)
-    suspend fun wipe(context: Context) {
-        check(canReadAllHistory(context)) {
-            "Health Connect cannot expose all owned records on this system module"
-        }
-        val client = HealthConnectClient.getOrCreate(context)
-        operationMutex.withLock {
-            wipe(client, context.packageName)
-        }
     }
 
     @RequiresApi(Build.VERSION_CODES.P)

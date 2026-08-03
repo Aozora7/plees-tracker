@@ -138,7 +138,7 @@ class MainActivity : AppCompatActivity(), View.OnClickListener {
             lifecycleScope.launch {
                 repeatOnLifecycle(Lifecycle.State.STARTED) {
                     try {
-                        HealthConnectBackend.reconcileForeground(applicationContext)
+                        HealthConnectBackend.scheduleReconcile(applicationContext)
                     } catch (e: SecurityException) {
                         Log.e(TAG, "Health Connect permission unavailable: $e")
                     } catch (e: Exception) {
