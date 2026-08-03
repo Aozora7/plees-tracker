@@ -15,7 +15,7 @@ import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 
-/** Writes Plees Tracker's local sleeps without reading Health Connect in the background. */
+/** Runs serialized Health Connect writes, reconciliations, and wipes. */
 class HealthConnectWorker(context: Context, params: WorkerParameters) :
     CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
@@ -29,14 +29,18 @@ class HealthConnectWorker(context: Context, params: WorkerParameters) :
         val userInitiated = inputData.getBoolean(HealthConnectBackend.USER_INITIATED_KEY, false)
         DataModel.init(context, PreferenceManager.getDefaultSharedPreferences(context))
         return try {
-            HealthConnectBackend.perform(context, operation)
+            HealthConnectBackend.perform(
+                context,
+                operation,
+                forceReconcile = userInitiated
+            )
             Result.success()
         } catch (e: SecurityException) {
             Log.e(TAG, "doWork: Health Connect permission unavailable: $e")
-            errorResult(userInitiated)
+            if (userInitiated) userFailure() else Result.success()
         } catch (e: Exception) {
             Log.e(TAG, "doWork: $operation failed: $e")
-            if (userInitiated) errorResult(true) else Result.retry()
+            if (userInitiated) userFailure() else Result.retry()
         }
     }
 
@@ -50,12 +54,9 @@ class HealthConnectWorker(context: Context, params: WorkerParameters) :
         }
     }
 
-    private fun errorResult(userInitiated: Boolean): Result =
-        if (userInitiated) {
-            Result.success(workDataOf(HealthConnectBackend.FAILED_KEY to true))
-        } else {
-            Result.success()
-        }
+    // Keep a completed WorkInfo available so the settings screen can report the failure.
+    private fun userFailure(): Result =
+        Result.success(workDataOf(HealthConnectBackend.FAILED_KEY to true))
 
     companion object {
         private const val TAG = "HealthConnectWorker"

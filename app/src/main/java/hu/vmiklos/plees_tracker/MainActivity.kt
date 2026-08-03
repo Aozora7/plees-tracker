@@ -137,14 +137,7 @@ class MainActivity : AppCompatActivity(), View.OnClickListener {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             lifecycleScope.launch {
                 repeatOnLifecycle(Lifecycle.State.STARTED) {
-                    try {
-                        HealthConnectBackend.scheduleReconcile(applicationContext)
-                    } catch (e: SecurityException) {
-                        Log.e(TAG, "Health Connect permission unavailable: $e")
-                    } catch (e: Exception) {
-                        // Keep tombstones for the next foreground session.
-                        Log.e(TAG, "Health Connect foreground reconciliation failed: $e")
-                    }
+                    HealthConnectBackend.scheduleReconcile(applicationContext)
                 }
             }
         }
