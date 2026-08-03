@@ -26,6 +26,7 @@ import java.time.Clock
 import java.time.Instant
 import java.util.UUID
 import kotlin.reflect.KClass
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -189,6 +190,80 @@ class HealthConnectSyncTest {
         HealthConnectBackend.write(client)
 
         assertEquals(0, database.sleepDao().getPendingHealthConnectWrites().size)
+    }
+
+    @Test
+    fun testForceReconcileRepairsCancelledWrite() = runBlocking {
+        val sleepCount = HealthConnectBackend.HEALTH_CONNECT_BATCH_SIZE + 1
+        database.sleepDao().insert((1..sleepCount).map(::sleep))
+        var calls = 0
+        val cancelledClient = object : HealthConnectClient by client {
+            override suspend fun insertRecords(records: List<Record>): InsertRecordsResponse {
+                calls++
+                if (calls == 2) {
+                    throw CancellationException("replaced by force reconciliation")
+                }
+                return client.insertRecords(records)
+            }
+        }
+        try {
+            HealthConnectBackend.write(cancelledClient)
+        } catch (_: CancellationException) {
+            // WorkManager REPLACE can cancel an automatic write after a completed batch.
+        }
+
+        HealthConnectBackend.sync(client, packageName)
+
+        assertEquals(
+            Pair(sleepCount, 0),
+            Pair(
+                HealthConnectBackend.readOwnRecords(client, packageName).size,
+                database.sleepDao().getPendingHealthConnectWrites().size
+            )
+        )
+    }
+
+    @Test
+    fun testRapidWritesAndForceReconciliationsConverge() = runBlocking {
+        repeat(12) { round ->
+            val firstIndex = round * 4 + 1
+            database.sleepDao().insert((firstIndex until firstIndex + 4).map(::sleep))
+            database.sleepDao().getAll().forEachIndexed { index, stored ->
+                if (index % 3 == round % 3) {
+                    stored.comment = "round $round, sleep $index"
+                    stored.healthConnectVersion++
+                    database.sleepDao().update(stored)
+                }
+            }
+            if (round % 3 == 2) {
+                HealthConnectBackend.sync(client, packageName)
+            } else {
+                HealthConnectBackend.write(client)
+            }
+        }
+        repeat(3) {
+            HealthConnectBackend.sync(client, packageName)
+        }
+
+        val local = database.sleepDao().getAll()
+        val expected = local.map { stored ->
+            Triple(
+                HealthConnectBackend.CLIENT_ID_PREFIX + stored.healthConnectId,
+                stored.healthConnectVersion,
+                HealthConnectNotes.encode(stored)
+            )
+        }.sortedBy { it.first }
+        val actual = HealthConnectBackend.readOwnRecords(client, packageName).map { record ->
+            Triple(
+                record.metadata.clientRecordId,
+                record.metadata.clientRecordVersion,
+                record.notes
+            )
+        }.sortedBy { it.first }
+        assertEquals(
+            Pair(expected, 0),
+            Pair(actual, database.sleepDao().getPendingHealthConnectWrites().size)
+        )
     }
 
     @Test
