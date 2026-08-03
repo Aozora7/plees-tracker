@@ -110,6 +110,32 @@ class HealthConnectSyncTest {
     }
 
     @Test
+    fun testDeleteUsesCurrentDatabaseHealthConnectId() = runBlocking {
+        database.sleepDao().insert(sleep(1).apply { healthConnectId = "" })
+        val staleSleep = database.sleepDao().getAll().single()
+        val assignedId = UUID.randomUUID().toString()
+        database.healthConnectDao().assignId(staleSleep.sid, assignedId)
+
+        DataModel.deleteSleepFromDatabase(staleSleep)
+
+        assertEquals(
+            listOf(HealthConnectDeletion(assignedId, staleSleep.start)),
+            database.healthConnectDao().getDeletions()
+        )
+    }
+
+    @Test
+    fun testDeletedSleepIsNotWrittenAfterIdAssignmentFails() = runBlocking {
+        database.sleepDao().insert(sleep(1).apply { healthConnectId = "" })
+        val pending = database.sleepDao().getPendingHealthConnectWrites()
+        database.sleepDao().delete(pending.single())
+
+        HealthConnectBackend.write(client, pending)
+
+        assertEquals(0, HealthConnectBackend.readOwnRecords(client, packageName).size)
+    }
+
+    @Test
     fun testCreate() = runBlocking {
         val sleep = sleep(1).apply {
             comment = "edited"
