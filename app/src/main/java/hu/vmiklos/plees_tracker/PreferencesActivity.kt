@@ -423,12 +423,14 @@ class PreferencesActivity : AppCompatActivity() {
                 skipButton.isEnabled = false
                 wipeButton.isEnabled = false
                 lifecycleScope.launch {
-                    try {
-                        HealthConnectBackend.wipe(applicationContext)
+                    val work = HealthConnectBackend.scheduleWipe(applicationContext)
+                    if (work != null &&
+                        HealthConnectBackend.awaitSuccess(applicationContext, work) == true
+                    ) {
                         dialog.dismiss()
                         finishHealthConnectEnable()
-                    } catch (e: Exception) {
-                        Log.e(TAG, "wipeHealthConnect: $e")
+                    } else {
+                        Log.e(TAG, "wipeHealthConnect: the wipe did not complete")
                         toast(R.string.health_connect_temporarily_unavailable)
                         importButton.isEnabled = true
                         skipButton.isEnabled = true
@@ -464,21 +466,20 @@ class PreferencesActivity : AppCompatActivity() {
     }
 
     private fun forceHealthConnectSync(showResult: Boolean) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
+        val work = HealthConnectBackend.forceReconcile(applicationContext) ?: return
+        if (!showResult) {
             return
         }
         lifecycleScope.launch {
-            try {
-                HealthConnectBackend.reconcileForeground(applicationContext, force = true)
-                if (showResult) {
-                    toast(R.string.health_connect_force_sync_finished)
+            val succeeded =
+                HealthConnectBackend.awaitSuccess(applicationContext, work) ?: return@launch
+            toast(
+                if (succeeded) {
+                    R.string.health_connect_force_sync_finished
+                } else {
+                    R.string.health_connect_temporarily_unavailable
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "forceHealthConnectSync: $e")
-                if (showResult) {
-                    toast(R.string.health_connect_temporarily_unavailable)
-                }
-            }
+            )
         }
     }
 
