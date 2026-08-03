@@ -14,6 +14,7 @@ import androidx.preference.PreferenceManager
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
+import kotlinx.coroutines.CancellationException
 
 /** Runs serialized Health Connect writes, reconciliations, and wipes. */
 class HealthConnectWorker(context: Context, params: WorkerParameters) :
@@ -28,19 +29,12 @@ class HealthConnectWorker(context: Context, params: WorkerParameters) :
         val operation = operation() ?: return Result.success()
         val userInitiated = inputData.getBoolean(HealthConnectBackend.USER_INITIATED_KEY, false)
         DataModel.init(context, PreferenceManager.getDefaultSharedPreferences(context))
-        return try {
+        return runOperation(operation, userInitiated) {
             HealthConnectBackend.perform(
                 context,
                 operation,
                 forceReconcile = userInitiated
             )
-            Result.success()
-        } catch (e: SecurityException) {
-            Log.e(TAG, "doWork: Health Connect permission unavailable: $e")
-            if (userInitiated) userFailure() else Result.success()
-        } catch (e: Exception) {
-            Log.e(TAG, "doWork: $operation failed: $e")
-            if (userInitiated) userFailure() else Result.retry()
         }
     }
 
@@ -54,12 +48,29 @@ class HealthConnectWorker(context: Context, params: WorkerParameters) :
         }
     }
 
-    // Keep a completed WorkInfo available so the settings screen can report the failure.
-    private fun userFailure(): Result =
-        Result.success(workDataOf(HealthConnectBackend.FAILED_KEY to true))
-
     companion object {
         private const val TAG = "HealthConnectWorker"
+
+        internal suspend fun runOperation(
+            operation: HealthConnectBackend.Operation,
+            userInitiated: Boolean,
+            block: suspend () -> Unit
+        ): Result = try {
+            block()
+            Result.success()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: SecurityException) {
+            Log.e(TAG, "runOperation: Health Connect permission unavailable: $e")
+            if (userInitiated) userFailure() else Result.success()
+        } catch (e: Exception) {
+            Log.e(TAG, "runOperation: $operation failed: $e")
+            if (userInitiated) userFailure() else Result.retry()
+        }
+
+        // Keep a completed WorkInfo available so the settings screen can report the failure.
+        private fun userFailure(): Result =
+            Result.success(workDataOf(HealthConnectBackend.FAILED_KEY to true))
     }
 }
 
