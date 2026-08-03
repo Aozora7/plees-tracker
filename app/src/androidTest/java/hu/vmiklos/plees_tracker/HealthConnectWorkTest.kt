@@ -9,14 +9,19 @@ package hu.vmiklos.plees_tracker
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.work.ListenableWorker
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.workDataOf
+import java.io.IOException
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -25,6 +30,61 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class HealthConnectWorkTest {
     private val context = ApplicationProvider.getApplicationContext<Context>()
+
+    @Test
+    fun testActiveCancellationIsRethrown() {
+        assertThrows(CancellationException::class.java) {
+            runBlocking {
+                HealthConnectWorker.runOperation(
+                    HealthConnectBackend.Operation.WRITE,
+                    userInitiated = false
+                ) {
+                    throw CancellationException("work replaced")
+                }
+            }
+        }
+    }
+
+    @Test
+    fun testAutomaticFailureIsRetried() = runBlocking {
+        val result = HealthConnectWorker.runOperation(
+            HealthConnectBackend.Operation.WRITE,
+            userInitiated = false
+        ) {
+            throw IOException("temporarily unavailable")
+        }
+
+        assertEquals(ListenableWorker.Result.retry(), result)
+    }
+
+    @Test
+    fun testAutomaticPermissionFailureIsNotRetried() = runBlocking {
+        val result = HealthConnectWorker.runOperation(
+            HealthConnectBackend.Operation.WRITE,
+            userInitiated = false
+        ) {
+            throw SecurityException("permission unavailable")
+        }
+
+        assertEquals(ListenableWorker.Result.success(), result)
+    }
+
+    @Test
+    fun testUserInitiatedFailureIsReported() = runBlocking {
+        val result = HealthConnectWorker.runOperation(
+            HealthConnectBackend.Operation.RECONCILE,
+            userInitiated = true
+        ) {
+            throw IOException("temporarily unavailable")
+        }
+
+        assertEquals(
+            ListenableWorker.Result.success(
+                workDataOf(HealthConnectBackend.FAILED_KEY to true)
+            ),
+            result
+        )
+    }
 
     @Test
     fun testSuccessfulWorkResultIsReported() = runBlocking {
