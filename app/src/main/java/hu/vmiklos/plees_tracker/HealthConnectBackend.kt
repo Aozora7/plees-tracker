@@ -112,6 +112,7 @@ object HealthConnectBackend {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || !isEnabled(context)) {
             return
         }
+        // Preserve edit order; a failed or cancelled chain starts fresh with this request.
         enqueue(
             context,
             Operation.WRITE,
@@ -120,11 +121,11 @@ object HealthConnectBackend {
         )
     }
 
-    @RequiresApi(Build.VERSION_CODES.P)
-    suspend fun scheduleReconcile(context: Context) {
-        if (!isEnabled(context) || !hasForegroundWork(readablePeriodStart(context))) {
+    fun scheduleReconcile(context: Context) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || !isEnabled(context)) {
             return
         }
+        // Check for pending work when this request runs, after earlier queued writes finish.
         enqueue(
             context,
             Operation.RECONCILE,
@@ -137,6 +138,7 @@ object HealthConnectBackend {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || !isEnabled(context)) {
             return null
         }
+        // A force sync supersedes queued writes because reconciliation uploads local changes too.
         return enqueue(
             context,
             Operation.RECONCILE,
@@ -149,6 +151,7 @@ object HealthConnectBackend {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
             return null
         }
+        // Wiping supersedes every queued operation and must not be followed by an older write.
         return enqueue(context, Operation.WIPE, userInitiated = true, ExistingWorkPolicy.REPLACE)
     }
 
@@ -286,23 +289,32 @@ object HealthConnectBackend {
     }
 
     @RequiresApi(Build.VERSION_CODES.P)
-    internal suspend fun perform(context: Context, operation: Operation) {
+    internal suspend fun perform(
+        context: Context,
+        operation: Operation,
+        forceReconcile: Boolean = false
+    ) {
         if (operation != Operation.WIPE && !isEnabled(context)) {
             return
         }
-        val client = HealthConnectClient.getOrCreate(context)
         when (operation) {
-            Operation.WRITE -> write(client)
-            Operation.RECONCILE -> sync(
-                client,
-                context.packageName,
-                readablePeriodStart(context)
-            )
+            Operation.WRITE -> write(HealthConnectClient.getOrCreate(context))
+            Operation.RECONCILE -> {
+                val readablePeriodStart = readablePeriodStart(context)
+                if (!forceReconcile && !hasForegroundWork(readablePeriodStart)) {
+                    return
+                }
+                sync(
+                    HealthConnectClient.getOrCreate(context),
+                    context.packageName,
+                    readablePeriodStart
+                )
+            }
             Operation.WIPE -> {
                 check(canReadAllHistory(context)) {
                     "Health Connect cannot expose all owned records on this system module"
                 }
-                wipe(client, context.packageName)
+                wipe(HealthConnectClient.getOrCreate(context), context.packageName)
             }
         }
     }
