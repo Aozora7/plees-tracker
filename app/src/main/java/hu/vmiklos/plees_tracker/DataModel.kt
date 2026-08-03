@@ -265,13 +265,19 @@ object DataModel {
     }
 
     suspend fun deleteSleep(sleep: Sleep) {
-        database.withTransaction {
-            if (sleep.healthConnectId.isNotEmpty()) {
-                database.healthConnectDao().insertDeletions(listOf(deletionFor(sleep)))
-            }
-            database.sleepDao().delete(sleep)
-        }
+        deleteSleepFromDatabase(sleep)
         scheduleHealthConnectSync()
+    }
+
+    internal suspend fun deleteSleepFromDatabase(sleep: Sleep) {
+        database.withTransaction {
+            val current = database.sleepDao().getByIdOrNull(sleep.sid)
+                ?: return@withTransaction
+            if (current.healthConnectId.isNotEmpty()) {
+                database.healthConnectDao().insertDeletions(listOf(deletionFor(current)))
+            }
+            database.sleepDao().delete(current)
+        }
     }
 
     suspend fun deleteAllSleep() {

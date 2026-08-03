@@ -422,13 +422,22 @@ object HealthConnectBackend {
     }
 
     @RequiresApi(Build.VERSION_CODES.P)
-    private suspend fun write(client: HealthConnectClient, sleeps: List<Sleep>) {
+    internal suspend fun write(client: HealthConnectClient, sleeps: List<Sleep>) {
         val healthDao = DataModel.database.healthConnectDao()
-        for (sleep in sleeps.filter { it.healthConnectId.isEmpty() }) {
-            sleep.healthConnectId = UUID.randomUUID().toString()
-            healthDao.assignId(sleep.sid, sleep.healthConnectId)
+        val writableSleeps = sleeps.filter { sleep ->
+            if (sleep.healthConnectId.isNotEmpty()) {
+                true
+            } else {
+                val id = UUID.randomUUID().toString()
+                if (healthDao.assignId(sleep.sid, id) == 1) {
+                    sleep.healthConnectId = id
+                    true
+                } else {
+                    false
+                }
+            }
         }
-        for (chunk in sleeps.chunked(HEALTH_CONNECT_BATCH_SIZE)) {
+        for (chunk in writableSleeps.chunked(HEALTH_CONNECT_BATCH_SIZE)) {
             client.insertRecords(chunk.map(::toRecord))
             // Persist progress after every successful provider batch. The version predicate in
             // markVersionSynced prevents a concurrent edit from being marked as uploaded.

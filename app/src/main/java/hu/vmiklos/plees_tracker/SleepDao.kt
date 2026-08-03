@@ -41,6 +41,9 @@ interface SleepDao {
     @Query("SELECT * from sleep where sid = :id LIMIT 1")
     suspend fun getById(id: Int): Sleep
 
+    @Query("SELECT * from sleep where sid = :id LIMIT 1")
+    suspend fun getByIdOrNull(id: Int): Sleep?
+
     @Query("SELECT * FROM sleep WHERE stop_date > :after ORDER BY start_date DESC")
     fun getAfterLive(after: Long): LiveData<List<Sleep>>
 
